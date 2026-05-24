@@ -4,7 +4,7 @@ set -euo pipefail
 # MIST (薄雾) Server one-line installer
 # Usage: curl -fsSL https://mist.viloris.org/install-server.sh | bash
 
-DOWNLOAD_BASE="${DOWNLOAD_BASE:-https://mist.viloris.org}"
+DOWNLOAD_BASE="${DOWNLOAD_BASE:-https://github.com/viloris-org/MIST/releases/latest/download}"
 BIN_NAME="mist-server"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
