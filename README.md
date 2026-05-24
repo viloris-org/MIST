@@ -1,4 +1,6 @@
-# MIST &middot; 薄雾
+# MIST
+
+[中文](docs/README/README.zh.md) · [日本語](docs/README/README.ja.md) · [Español](docs/README/README.es.md) · [Русский](docs/README/README.ru.md)
 
 MIST is a compact TLS-based private overlay transport for reliable secure connectivity in compliant enterprise, commercial, and self-managed deployments.
 
@@ -14,8 +16,6 @@ The current implementation provides:
 - Self-signed, ACME, and custom certificate modes
 - Optional systemd installation through the bundled installer
 - HMAC frame integrity and challenge-response authentication (protocol v3)
-
-[中文](docs/README/README.zh.md) · [日本語](docs/README/README.ja.md) · [Español](docs/README/README.es.md) · [Русский](docs/README/README.ru.md)
 
 ## One-Line Server Install
 

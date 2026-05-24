@@ -1,4 +1,4 @@
-# MIST · 薄雾（ミスト）
+# MIST · ミスト
 
 [English](../../README.md) · [中文](README.zh.md) · 日本語 · [Español](README.es.md) · [Русский](README.ru.md)
 
