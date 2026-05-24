@@ -8,8 +8,36 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build
+  server:
+    name: Server (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      CGO_ENABLED: 0
+      GOOS: linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build
+        run: |
+          GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o mist-server-linux-${{ matrix.goarch }} ./cmd/mist-server
+
+      - name: Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mist-server-linux-${{ matrix.goarch }}
+
+  client:
+    name: Client (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -27,31 +55,13 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Build server
+      - name: Build
         run: |
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o mist-server-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/server
+          SUFFIX=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then SUFFIX=".exe"; fi
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o mist-client-${{ matrix.goos }}-${{ matrix.goarch }}${SUFFIX} ./cmd/mist-client
 
-      - name: Build client
-        run: |
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o mist-client-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/client
-
-      - name: Package (unix)
-        if: matrix.goos != 'windows'
-        run: |
-          tar -czf mist-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
-            mist-server-${{ matrix.goos }}-${{ matrix.goarch }} \
-            mist-client-${{ matrix.goos }}-${{ matrix.goarch }}
-
-      - name: Package (windows)
-        if: matrix.goos == 'windows'
-        run: |
-          zip mist-windows-${{ matrix.goarch }}.zip \
-            mist-server-windows-${{ matrix.goarch }} \
-            mist-client-windows-${{ matrix.goarch }}
-
-      - name: Upload assets
+      - name: Upload
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            mist-*.tar.gz
-            mist-*.zip
+          files: mist-client-${{ matrix.goos }}-${{ matrix.goarch }}*

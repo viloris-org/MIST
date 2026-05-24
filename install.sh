@@ -159,7 +159,7 @@ else
     echo -e "${YELLOW}[INFO]${NC} $(msg bin_not_found)"
     if command -v go >/dev/null 2>&1; then
         echo -e "${BLUE}$(msg compiling)...${NC}"
-        if go build -o mist-server ./cmd/server; then
+        if go build -o mist-server ./cmd/mist-server; then
             echo -e "${GREEN}[SUCCESS]${NC} $(msg compile_success)"
         else
             echo -e "${RED}[ERROR]${NC} $(msg compile_fail)"

@@ -4,8 +4,8 @@
 *.exe
 *.zip
 .vscode
-mist-server
-mist-client
+/mist-server
+/mist-client
 start.sh
 cert-cache/
 *.pem
