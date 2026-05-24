@@ -13,6 +13,9 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0;37m' # 无颜色
 
+DOWNLOAD_BASE="${DOWNLOAD_BASE:-https://github.com/viloris-org/MIST/releases/latest/download}"
+BIN_NAME="mist-server"
+
 # 自动检测语言 (中文/英文)
 LANG_CODE="en"
 if [[ "$LANG" =~ ^zh ]]; then
@@ -28,7 +31,8 @@ msg() {
                 err_root) echo "请使用 root 权限运行此脚本 (例如: sudo bash install.sh)" ;;
                 check_bin) echo "检查 mist-server 二进制文件..." ;;
                 bin_found) echo "找到当前目录下的 mist-server 二进制。" ;;
-                bin_not_found) echo "当前目录未找到 mist-server 二进制，尝试使用 Go 进行本地编译..." ;;
+                bin_not_found) echo "当前目录未找到 mist-server 二进制，正在下载预编译版本..." ;;
+                download_fail) echo "下载 mist-server 失败，尝试使用 Go 进行本地编译..." ;;
                 compiling) echo "正在编译 mist-server..." ;;
                 compile_success) echo "编译成功！" ;;
                 compile_fail) echo "编译失败，请确保 Go 环境及依赖完整。" ;;
@@ -81,7 +85,8 @@ msg() {
                 err_root) echo "Please run this script with root privileges (e.g. sudo bash install.sh)" ;;
                 check_bin) echo "Checking mist-server binary..." ;;
                 bin_found) echo "mist-server binary found in the current directory." ;;
-                bin_not_found) echo "mist-server binary not found, attempting to compile locally using Go..." ;;
+                bin_not_found) echo "mist-server binary not found, downloading prebuilt binary..." ;;
+                download_fail) echo "Failed to download mist-server, attempting to compile locally using Go..." ;;
                 compiling) echo "Compiling mist-server..." ;;
                 compile_success) echo "Compilation succeeded!" ;;
                 compile_fail) echo "Compilation failed. Please ensure the Go environment and dependencies are complete." ;;
@@ -132,6 +137,19 @@ msg() {
     esac
 }
 
+detect_platform() {
+    case "$(uname -s)" in
+        Linux) ;;
+        *) return 1 ;;
+    esac
+
+    case "$(uname -m)" in
+        x86_64|amd64) echo "linux-amd64" ;;
+        aarch64|arm64) echo "linux-arm64" ;;
+        *) return 1 ;;
+    esac
+}
+
 # 打印漂亮的横幅
 echo -e "${CYAN}"
 echo "=========================================================="
@@ -151,23 +169,39 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 2. 检测并编译 mist-server
+# 2. 检测并下载/编译 mist-server
 echo -e "${BLUE}[1/4]${NC} $(msg check_bin)"
 if [ -f "./mist-server" ]; then
     echo -e "${GREEN}[SUCCESS]${NC} $(msg bin_found)"
 else
     echo -e "${YELLOW}[INFO]${NC} $(msg bin_not_found)"
-    if command -v go >/dev/null 2>&1; then
-        echo -e "${BLUE}$(msg compiling)...${NC}"
-        if go build -o mist-server ./cmd/mist-server; then
-            echo -e "${GREEN}[SUCCESS]${NC} $(msg compile_success)"
+    PLATFORM=$(detect_platform || true)
+    if [ -n "$PLATFORM" ]; then
+        DOWNLOAD_URL="${DOWNLOAD_BASE}/${BIN_NAME}-${PLATFORM}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$DOWNLOAD_URL" -o "./mist-server" || rm -f "./mist-server"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q "$DOWNLOAD_URL" -O "./mist-server" || rm -f "./mist-server"
+        fi
+    fi
+
+    if [ -f "./mist-server" ]; then
+        chmod +x ./mist-server
+        echo -e "${GREEN}[SUCCESS]${NC} $(msg bin_found)"
+    else
+        echo -e "${YELLOW}[INFO]${NC} $(msg download_fail)"
+        if command -v go >/dev/null 2>&1; then
+            echo -e "${BLUE}$(msg compiling)...${NC}"
+            if go build -o mist-server ./cmd/mist-server; then
+                echo -e "${GREEN}[SUCCESS]${NC} $(msg compile_success)"
+            else
+                echo -e "${RED}[ERROR]${NC} $(msg compile_fail)"
+                exit 1
+            fi
         else
-            echo -e "${RED}[ERROR]${NC} $(msg compile_fail)"
+            echo -e "${RED}[ERROR]${NC} $(msg go_env_fail)"
             exit 1
         fi
-    else
-        echo -e "${RED}[ERROR]${NC} $(msg go_env_fail)"
-        exit 1
     fi
 fi
 
@@ -213,7 +247,7 @@ case $mode_choice in
         read -p "$(msg prompt_acme_cache) [$(msg default) cert-cache]: " input_acme_cache
         ACME_CACHE=${input_acme_cache:-cert-cache}
 
-        read -p "$(msg prompt_acme_email): " CERT_EMAIL
+        read -p "$(msg prompt_acme_email): " ACME_EMAIL
         ;;
     3)
         CERT_TYPE="custom"
