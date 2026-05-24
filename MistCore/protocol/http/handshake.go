@@ -3,7 +3,6 @@ package http
 import (
 	std_bufio "bufio"
 	"context"
-	"encoding/base64"
 	"io"
 	"net"
 	"net/http"
@@ -36,20 +35,14 @@ func HandleConnection(ctx context.Context, conn net.Conn, reader *std_bufio.Read
 				authOk   bool
 			)
 			authorization := request.Header.Get("Proxy-Authorization")
-			if strings.HasPrefix(authorization, "Basic ") {
-				userPassword, _ := base64.URLEncoding.DecodeString(authorization[6:])
-				userPswdArr := strings.SplitN(string(userPassword), ":", 2)
-				if len(userPswdArr) == 2 {
-					username = userPswdArr[0]
-					password = userPswdArr[1]
-					authOk = authenticator.Verify(username, password)
-					if authOk {
-						ctx = auth.ContextWithUser(ctx, userPswdArr[0])
-					}
+			username, password, authOk = ParseBasicAuth(authorization)
+			if authOk {
+				authOk = authenticator.Verify(username, password)
+				if authOk {
+					ctx = auth.ContextWithUser(ctx, username)
 				}
 			}
 			if !authOk {
-				// Since no one else is using the library, use a fixed realm until rewritten
 				err = responseWith(
 					request, http.StatusProxyAuthRequired,
 					"Proxy-Authenticate", `Basic realm="sing-box" charset="UTF-8"`,
@@ -147,7 +140,7 @@ func handleHTTPConnection(
 	request *http.Request,
 	metadata M.Metadata,
 ) error {
-	keepAlive := !(request.ProtoMajor == 1 && request.ProtoMinor == 0) && strings.TrimSpace(strings.ToLower(request.Header.Get("Proxy-Connection"))) == "keep-alive"
+	keepAlive := shouldKeepAlive(request)
 	request.RequestURI = ""
 
 	removeHopByHopHeaders(request.Header)
@@ -216,10 +209,6 @@ func handleHTTPConnection(
 }
 
 func removeHopByHopHeaders(header http.Header) {
-	// Strip hop-by-hop header based on RFC:
-	// http://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html#sec13.5.1
-	// https://www.mnot.net/blog/2011/07/11/what_proxies_must_do
-
 	header.Del("Proxy-Connection")
 	header.Del("Proxy-Authenticate")
 	header.Del("Proxy-Authorization")
@@ -253,6 +242,15 @@ func removeExtraHTTPHostPort(req *http.Request) {
 
 	req.Host = host
 	req.URL.Host = host
+}
+
+func shouldKeepAlive(request *http.Request) bool {
+	connection := strings.ToLower(strings.TrimSpace(request.Header.Get("Connection")))
+	if request.ProtoMajor > 1 || (request.ProtoMajor == 1 && request.ProtoMinor >= 1) {
+		return connection != "close"
+	}
+	proxyConnection := strings.ToLower(strings.TrimSpace(request.Header.Get("Proxy-Connection")))
+	return connection == "keep-alive" || proxyConnection == "keep-alive"
 }
 
 func responseWith(request *http.Request, statusCode int, headers ...string) *http.Response {

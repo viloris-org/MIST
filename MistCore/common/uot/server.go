@@ -3,9 +3,11 @@ package uot
 import (
 	"encoding/binary"
 	"io"
+	"math"
 	"net"
 
 	"MistCore/common/buf"
+	E "MistCore/common/exceptions"
 	M "MistCore/common/metadata"
 )
 
@@ -105,6 +107,10 @@ func (c *ServerConn) loopOutput() {
 			if err != nil {
 				break
 			}
+		}
+		if n > math.MaxUint16 {
+			err = E.New("UoT write: payload too large")
+			break
 		}
 		err = binary.Write(c.outputWriter, binary.BigEndian, uint16(n))
 		if err != nil {

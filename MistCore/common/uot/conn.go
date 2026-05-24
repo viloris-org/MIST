@@ -3,6 +3,7 @@ package uot
 import (
 	"encoding/binary"
 	"io"
+	"math"
 	"net"
 
 	"MistCore/common"
@@ -72,6 +73,9 @@ func (c *Conn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (c *Conn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	if len(p) > math.MaxUint16 {
+		return 0, E.New("UoT write: payload too large")
+	}
 	destination := M.SocksaddrFromNet(addr)
 	var bufferLen int
 	if !c.isConnect {
@@ -123,6 +127,9 @@ func (c *Conn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err erro
 }
 
 func (c *Conn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
+	if buffer.Len() > math.MaxUint16 {
+		return E.New("UoT write: payload too large")
+	}
 	var headerLen int
 	if !c.isConnect {
 		headerLen += AddrParser.AddrPortLen(destination)
