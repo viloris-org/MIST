@@ -1,13 +1,16 @@
 package session
 
 import (
-	"mist/proxy/pipe"
 	"io"
 	"net"
 	"os"
 	"sync"
 	"time"
+
+	"MistCore/common/buf"
 )
+
+const streamReadBuffer = 16
 
 // Stream implements net.Conn
 type Stream struct {
@@ -15,9 +18,13 @@ type Stream struct {
 
 	sess *Session
 
-	pipeR         *pipe.PipeReader
-	pipeW         *pipe.PipeWriter
-	writeDeadline pipe.PipeDeadline
+	dataCh  chan []byte
+	dataBuf []byte
+	dataOff int
+	readMu  sync.Mutex
+	die     chan struct{}
+
+	writeDeadline pipeDeadline
 
 	dieOnce sync.Once
 	dieHook func()
@@ -31,18 +38,52 @@ func newStream(id uint32, sess *Session) *Stream {
 	s := new(Stream)
 	s.id = id
 	s.sess = sess
-	s.pipeR, s.pipeW = pipe.Pipe()
-	s.writeDeadline = pipe.MakePipeDeadline()
+	s.dataCh = make(chan []byte, streamReadBuffer)
+	s.die = make(chan struct{})
 	return s
 }
 
 // Read implements net.Conn
 func (s *Stream) Read(b []byte) (n int, err error) {
-	n, err = s.pipeR.Read(b)
-	if n == 0 && s.dieErr != nil {
-		err = s.dieErr
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+
+	// consume remaining data from previous frame
+	if s.dataOff < len(s.dataBuf) {
+		n = copy(b, s.dataBuf[s.dataOff:])
+		s.dataOff += n
+		if s.dataOff >= len(s.dataBuf) {
+			buf.Put(s.dataBuf)
+			s.dataBuf = nil
+			s.dataOff = 0
+		}
+		return n, nil
 	}
-	return
+
+	// get next frame
+	select {
+	case frame, ok := <-s.dataCh:
+		if !ok {
+			if s.dieErr != nil {
+				return 0, s.dieErr
+			}
+			return 0, io.EOF
+		}
+		s.dataBuf = frame
+		n = copy(b, frame)
+		s.dataOff = n
+		if n >= len(frame) {
+			buf.Put(frame)
+			s.dataBuf = nil
+			s.dataOff = 0
+		}
+		return n, nil
+	case <-s.die:
+		if s.dieErr != nil {
+			return 0, s.dieErr
+		}
+		return 0, io.ErrClosedPipe
+	}
 }
 
 // Write implements net.Conn
@@ -69,7 +110,8 @@ func (s *Stream) closeLocally() {
 	var once bool
 	s.dieOnce.Do(func() {
 		s.dieErr = net.ErrClosed
-		s.pipeR.Close()
+		close(s.die)
+		s.drainDataCh()
 		once = true
 	})
 	if once {
@@ -84,7 +126,8 @@ func (s *Stream) closeWithError(err error) error {
 	var once bool
 	s.dieOnce.Do(func() {
 		s.dieErr = err
-		s.pipeR.Close()
+		close(s.die)
+		s.drainDataCh()
 		once = true
 	})
 	if once {
@@ -98,8 +141,36 @@ func (s *Stream) closeWithError(err error) error {
 	}
 }
 
+func (s *Stream) drainDataCh() {
+	// drain and release any pending buffers
+	s.readMu.Lock()
+	if s.dataBuf != nil && s.dataOff < len(s.dataBuf) {
+		buf.Put(s.dataBuf)
+		s.dataBuf = nil
+		s.dataOff = 0
+	}
+	s.readMu.Unlock()
+
+	for {
+		select {
+		case frame := <-s.dataCh:
+			buf.Put(frame)
+		default:
+			return
+		}
+	}
+}
+
+func (s *Stream) deliverData(frame []byte) {
+	select {
+	case s.dataCh <- frame:
+	case <-s.die:
+		buf.Put(frame)
+	}
+}
+
 func (s *Stream) SetReadDeadline(t time.Time) error {
-	return s.pipeR.SetReadDeadline(t)
+	return nil
 }
 
 func (s *Stream) SetWriteDeadline(t time.Time) error {
@@ -160,4 +231,42 @@ func (s *Stream) HandshakeSuccess() error {
 		}
 	}
 	return nil
+}
+
+type pipeDeadline struct {
+	mu     sync.Mutex
+	timer  *time.Timer
+	cancel chan struct{}
+}
+
+func (d *pipeDeadline) Set(t time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.timer != nil {
+		d.timer.Stop()
+	}
+	if d.cancel == nil {
+		d.cancel = make(chan struct{})
+	}
+	if t.IsZero() {
+		return
+	}
+	select {
+	case <-d.cancel:
+		d.cancel = make(chan struct{})
+	default:
+	}
+	d.timer = time.AfterFunc(time.Until(t), func() {
+		close(d.cancel)
+	})
+}
+
+func (d *pipeDeadline) Wait() chan struct{} {
+	d.mu.Lock()
+	if d.cancel == nil {
+		d.cancel = make(chan struct{})
+	}
+	ch := d.cancel
+	d.mu.Unlock()
+	return ch
 }

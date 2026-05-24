@@ -327,6 +327,7 @@ func (p *idleSessionPool) PopFirst() *Session {
 		return nil
 	}
 	s := p.items[0].session
-	p.items = slices.Delete(p.items, 0, 1)
+	p.items[0] = idleSessionItem{} // allow GC of popped item
+	p.items = p.items[1:]
 	return s
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"mist/proxy"
 	"mist/proxy/padding"
 	"mist/proxy/session"
 	"context"
@@ -25,6 +26,7 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		}
 	}()
 
+	proxy.SetTCPFastOpen(c)
 	c = tls.Server(c, s.tlsConfig)
 	defer c.Close()
 	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))

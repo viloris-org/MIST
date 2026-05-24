@@ -124,6 +124,9 @@ func newSelfSignedTLSConfig(certName, listen string, requireIP bool) (*tls.Confi
 	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
+		CurvePreferences: []tls.CurveID{
+			tls.X25519,
+		},
 		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return tlsCert, nil
 		},
@@ -146,6 +149,9 @@ func newCustomTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
+		CurvePreferences: []tls.CurveID{
+			tls.X25519,
+		},
 		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return &tlsCert, nil
 		},
@@ -185,6 +191,7 @@ func newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail string) (*tls.Con
 	logrus.Infof("[Server] TLS ACME domain cert %s cache %s http-01 %s", domain, acmeCache, acmeHTTP)
 	tlsConfig := manager.TLSConfig()
 	tlsConfig.MinVersion = tls.VersionTLS12
+	tlsConfig.CurvePreferences = []tls.CurveID{tls.X25519}
 	return tlsConfig, nil
 }
 

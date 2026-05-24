@@ -1,6 +1,7 @@
 package main
 
 import (
+	"mist/proxy"
 	"mist/proxy/padding"
 	"mist/proxy/session"
 	"mist/util"
@@ -44,6 +45,8 @@ func (c *myClient) createOutboundConnection(ctx context.Context) (net.Conn, erro
 	if err != nil {
 		return nil, err
 	}
+
+	proxy.SetTCPFastOpen(conn)
 
 	b := buf.NewPacket()
 	defer b.Release()

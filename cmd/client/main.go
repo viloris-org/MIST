@@ -80,6 +80,7 @@ func main() {
 		ServerName:         serverNameForTLS(serverHost, *sni),
 		InsecureSkipVerify: *insecure || *tlsCertSha256 != "",
 		MinVersion:         tls.VersionTLS12,
+		ClientSessionCache: tls.NewLRUClientSessionCache(64),
 	}
 	if *tlsCertSha256 != "" {
 		pin, err := parseCertificatePin(*tlsCertSha256)

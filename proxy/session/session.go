@@ -66,6 +66,7 @@ func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.Paddin
 		isClient:    true,
 		sendPadding: true,
 		padding:     _padding,
+		writeBuffer: make([]byte, headerOverHeadSize+maxFramePayloadLen),
 	}
 	s.die = make(chan struct{})
 	s.streams = make(map[uint32]*Stream)
@@ -77,6 +78,7 @@ func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding 
 		conn:        conn,
 		onNewStream: onNewStream,
 		padding:     _padding,
+		writeBuffer: make([]byte, headerOverHeadSize+maxFramePayloadLen),
 	}
 	s.die = make(chan struct{})
 	s.streams = make(map[uint32]*Stream)
@@ -202,9 +204,10 @@ func (s *Session) recvLoop() error {
 						stream, ok := s.streams[sid]
 						s.streamLock.RUnlock()
 						if ok {
-							stream.pipeW.Write(buffer)
+							stream.deliverData(buffer)
+						} else {
+							buf.Put(buffer)
 						}
-						buf.Put(buffer)
 					} else {
 						buf.Put(buffer)
 						return err
@@ -263,12 +266,9 @@ func (s *Session) recvLoop() error {
 				//logrus.Debugln("stream fin", sid, s.streams)
 			case cmdWaste:
 				if hdr.Length() > 0 {
-					buffer := buf.Get(int(hdr.Length()))
-					if _, err := io.ReadFull(s.conn, buffer); err != nil {
-						buf.Put(buffer)
+					if _, err := io.CopyN(io.Discard, s.conn, int64(hdr.Length())); err != nil {
 						return err
 					}
-					buf.Put(buffer)
 				}
 			case cmdSettings:
 				if hdr.Length() > 0 {
@@ -380,16 +380,50 @@ func (s *Session) streamClosed(sid uint32) error {
 }
 
 func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
-	total := 0
-	for len(data) > 0 {
-		chunkLen := min(len(data), maxFramePayloadLen)
-		if err := s.writePSHFrame(sid, data[:chunkLen]); err != nil {
-			return total, err
+	if s.sendPadding {
+		total := 0
+		for len(data) > 0 {
+			chunkLen := min(len(data), maxFramePayloadLen)
+			if err := s.writePSHFrame(sid, data[:chunkLen]); err != nil {
+				return total, err
+			}
+			total += chunkLen
+			data = data[chunkLen:]
 		}
-		total += chunkLen
-		data = data[chunkLen:]
+		return total, nil
 	}
-	return total, nil
+
+	// Fast path: no padding — batch all chunks into a single write
+	chunks := (len(data) + maxFramePayloadLen - 1) / maxFramePayloadLen
+	totalFrameLen := len(data) + chunks*headerOverHeadSize
+	if cap(s.writeBuffer) < totalFrameLen {
+		s.writeBuffer = make([]byte, totalFrameLen)
+	}
+	frame := s.writeBuffer[:totalFrameLen]
+	offset := 0
+	remaining := data
+	for len(remaining) > 0 {
+		chunkLen := min(len(remaining), maxFramePayloadLen)
+		frame[offset] = cmdPSH
+		binary.BigEndian.PutUint32(frame[offset+1:], sid)
+		binary.BigEndian.PutUint16(frame[offset+5:], uint16(chunkLen))
+		copy(frame[offset+headerOverHeadSize:], remaining[:chunkLen])
+		offset += headerOverHeadSize + chunkLen
+		remaining = remaining[chunkLen:]
+	}
+
+	s.connLock.Lock()
+	defer s.connLock.Unlock()
+	n, err := s.writeConnLocked(frame)
+	if n > chunks*headerOverHeadSize {
+		n -= chunks * headerOverHeadSize
+	} else {
+		n = 0
+	}
+	if n > len(data) {
+		n = len(data)
+	}
+	return n, err
 }
 
 func (s *Session) writePSHFrame(sid uint32, data []byte) error {
