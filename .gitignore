@@ -4,7 +4,8 @@
 *.exe
 *.zip
 .vscode
-anytls-server
+mist-server
+mist-client
 start.sh
 cert-cache/
 *.pem
@@ -12,3 +13,6 @@ cert-cache/
 .codex/
 .env
 .codex
+CLAUDE.md
+AGENTS.md
+.claude
