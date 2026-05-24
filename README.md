@@ -142,6 +142,58 @@ The client also accepts `mist://` URLs:
 - Keep passwords, private keys, startup scripts, and certificate cache out of version control.
 - Use externally managed secrets and certificate lifecycle tooling for production.
 
-## Compatibility
+## Compliance and Legal
+
+MIST is a general-purpose network transport tool. It does not collect telemetry, phone home, or include any backdoor or bypass mechanism. Like any networking software, it can be used for both legitimate and illegitimate purposes. The authors and contributors provide this software as-is for authorized use only.
+
+### Authorized Use
+
+This software is intended solely for legitimate and authorized purposes, including:
+
+- Internal infrastructure access and private overlay networking
+- Remote system administration and DevOps workflows
+- Secure connectivity within commercial, enterprise, and self-managed environments
+- Educational use, security research in authorized contexts (e.g. CTF, lab environments), and personal self-hosting
+
+You may not use MIST for any purpose that violates applicable laws, regulations, or the rights of others. If you are uncertain whether your use case is authorized, consult qualified legal counsel before deploying.
+
+### Operator Responsibilities
+
+Deploying MIST in any environment makes you the operator of that deployment. Operators are solely responsible for:
+
+- Ensuring the deployment complies with all applicable local, national, and international laws and regulations
+- Obtaining any required authorizations, licenses, or permits before operating encrypted tunneling infrastructure
+- Restricting access to approved users and systems through appropriate authentication, firewall rules, and access controls
+- Protecting credentials, private keys, logs, certificate material, and configuration from unauthorized access
+- Monitoring service health, capacity, and security according to organizational operational requirements
+- Maintaining an upgrade and rollback process for production environments
+- Complying with data protection and privacy obligations, including those related to user traffic that may transit the server
+- Keeping accurate deployment records aligned with change management and access control policies
+
+### No Liability
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The authors and contributors assume no liability for:
+
+- Misuse of the software by operators or end users
+- Damages resulting from misconfiguration, inadequate security practices, or failure to follow operational best practices
+- Violations of law, regulation, or third-party rights arising from any deployment or use of the software
+- Traffic transmitted through MIST tunnels, including any illegal or unauthorized content
+- Security incidents resulting from operator failure to apply updates, manage credentials, or secure infrastructure
+
+### Jurisdiction and Export
+
+MIST is developed and distributed globally. By using or distributing this software, you represent that your use and distribution comply with all applicable export control laws, sanctions regulations, and trade restrictions of your jurisdiction and any jurisdiction where the software is deployed.
+
+### Third-Party Services
+
+If you deploy MIST on infrastructure provided by third parties (cloud providers, VPS hosts, CDN services, domain registrars, certificate authorities, etc.), you are responsible for complying with those providers' terms of service and acceptable use policies. The authors make no representation that use of MIST is permitted under any specific provider's terms.
+
+### Reporting
+
+To report a security vulnerability, please open a private security advisory on the GitHub repository. For other concerns, contact the maintainers through the project's official channels.
+
+---
 
 Protocol v3 with HMAC frame integrity and challenge-response authentication. Compatible with `mist/0.0.2` and later.
