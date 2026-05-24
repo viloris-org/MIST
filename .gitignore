@@ -1,0 +1,14 @@
+/dist
+/cmd/client/client
+/cmd/server/server
+*.exe
+*.zip
+.vscode
+anytls-server
+start.sh
+cert-cache/
+*.pem
+*.key
+.codex/
+.env
+.codex
