@@ -121,7 +121,7 @@ func HandleConnection0(ctx context.Context, conn net.Conn, reader *std_bufio.Rea
 				if err != nil {
 					return err
 				}
-				return E.New("socks4: authentication failed, username=", request.Username)
+				return E.New("socks4: authentication failed")
 			}
 			err = socks4.WriteResponse(conn, socks4.Response{
 				ReplyCode:   socks4.ReplyCodeGranted,
@@ -185,7 +185,7 @@ func HandleConnection0(ctx context.Context, conn net.Conn, reader *std_bufio.Rea
 				return err
 			}
 			if response.Status != socks5.UsernamePasswordStatusSuccess {
-				return E.New("socks5: authentication failed, username=", usernamePasswordAuthRequest.Username, ", password=", usernamePasswordAuthRequest.Password)
+				return E.New("socks5: authentication failed")
 			}
 		}
 		request, err := socks5.ReadRequest(reader)

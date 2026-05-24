@@ -26,7 +26,10 @@ func TestGenerateRecordPayloadSizesIntoReusesDestination(t *testing.T) {
 		t.Fatal("expected padding factory")
 	}
 	dst := make([]int, 0, 3)
-	got := factory.GenerateRecordPayloadSizesInto(1, dst)
+	got, err := factory.GenerateRecordPayloadSizesInto(1, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 3 || got[0] != 10 || got[1] != CheckMark || got[2] != 20 {
 		t.Fatalf("unexpected payload sizes: %#v", got)
 	}

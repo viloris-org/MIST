@@ -10,7 +10,10 @@ func TestTLSConfigSNIWithExplicitSNI(t *testing.T) {
 		ServerAddr: "203.0.113.10:8443",
 		SNI:        "example.com",
 	}
-	cfg := opts.TLSConfig()
+	cfg, err := opts.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.ServerName != "example.com" {
 		t.Fatalf("ServerName = %q, want example.com", cfg.ServerName)
 	}
@@ -20,7 +23,10 @@ func TestTLSConfigSNIUsesDomainHost(t *testing.T) {
 	opts := Options{
 		ServerAddr: "example.com:8443",
 	}
-	cfg := opts.TLSConfig()
+	cfg, err := opts.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.ServerName != "example.com" {
 		t.Fatalf("ServerName = %q, want example.com", cfg.ServerName)
 	}
@@ -30,7 +36,10 @@ func TestTLSConfigSNIHidesSNIForIPHost(t *testing.T) {
 	opts := Options{
 		ServerAddr: "203.0.113.10:8443",
 	}
-	cfg := opts.TLSConfig()
+	cfg, err := opts.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.ServerName != "" {
 		t.Fatalf("ServerName = %q, want empty (no SNI for IP)", cfg.ServerName)
 	}
@@ -41,7 +50,10 @@ func TestTLSConfigCertPinVerification(t *testing.T) {
 		ServerAddr:    "example.com:8443",
 		TLSCertSHA256: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 	}
-	cfg := opts.TLSConfig()
+	cfg, err := opts.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !cfg.InsecureSkipVerify {
 		t.Fatal("InsecureSkipVerify should be true when cert pin is set")
 	}
@@ -61,6 +73,17 @@ func TestOptionsValidateMissingPassword(t *testing.T) {
 	opts := Options{ServerAddr: "example.com:8443"}
 	if err := opts.Validate(); err == nil {
 		t.Fatal("expected error for missing Password")
+	}
+}
+
+func TestOptionsValidateRejectsInvalidCertPin(t *testing.T) {
+	opts := Options{
+		ServerAddr:    "example.com:8443",
+		Password:      "test",
+		TLSCertSHA256: "not-hex",
+	}
+	if err := opts.Validate(); err == nil {
+		t.Fatal("expected invalid TLSCertSHA256 to fail validation")
 	}
 }
 

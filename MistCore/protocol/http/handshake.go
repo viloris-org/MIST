@@ -50,13 +50,7 @@ func HandleConnection(ctx context.Context, conn net.Conn, reader *std_bufio.Read
 				if err != nil {
 					return err
 				}
-				if username != "" {
-					return E.New("http: authentication failed, username=", username, ", password=", password)
-				} else if authorization != "" {
-					return E.New("http: authentication failed, Proxy-Authorization=", authorization)
-				} else {
-					return E.New("http: authentication failed, no Proxy-Authorization header")
-				}
+				return E.New("http: authentication failed")
 			}
 		}
 

@@ -1,28 +1,29 @@
 package session
 
 import (
-	"io"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"mist/proxy/padding"
 )
 
+type discardConn struct{}
+
+func (discardConn) Close() error                     { return nil }
+func (discardConn) LocalAddr() net.Addr              { return nil }
+func (discardConn) RemoteAddr() net.Addr             { return nil }
+func (discardConn) SetDeadline(time.Time) error      { return nil }
+func (discardConn) SetReadDeadline(time.Time) error  { return nil }
+func (discardConn) SetWriteDeadline(time.Time) error { return nil }
+func (discardConn) Read([]byte) (int, error)         { return 0, net.ErrClosed }
+func (discardConn) Write(b []byte) (int, error)      { return len(b), nil }
+
 func newBenchSession(b *testing.B, enablePadding bool) *Session {
 	b.Helper()
 
-	local, remote := net.Pipe()
-	b.Cleanup(func() {
-		_ = local.Close()
-		_ = remote.Close()
-	})
-
-	go func() {
-		_, _ = io.Copy(io.Discard, remote)
-	}()
-
-	s := NewClientSession(local, &padding.DefaultPaddingFactory, 0, 0, 0, 0, nil)
+	s := NewClientSession(discardConn{}, &padding.DefaultPaddingFactory, 0, 0, 0, 0, nil)
 	s.sendPadding = enablePadding
 	return s
 }
@@ -73,6 +74,23 @@ func BenchmarkWriteDataFramePaddingWindow(b *testing.B) {
 			if _, err := s.writeDataFrame(1, payload); err != nil {
 				b.Fatal(err)
 			}
+		}
+	}
+}
+
+func BenchmarkWriteDataFrameHMAC(b *testing.B) {
+	payload := make([]byte, 16*1024)
+	s := newBenchSession(b, false)
+	s.setHMACKey([]byte("0123456789abcdef0123456789abcdef"))
+	s.hmacMode = true
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := s.writeDataFrame(1, payload); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

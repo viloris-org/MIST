@@ -38,10 +38,15 @@ func NewClient(opts Options) (*Client, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	tlsConfig, err := opts.TLSConfig()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	c := &Client{
 		opts:         opts,
 		passwordHash: opts.PasswordHash(),
-		tlsConfig:    opts.TLSConfig(),
+		tlsConfig:    tlsConfig,
 		die:          ctx,
 		dieCancel:    cancel,
 	}
@@ -98,7 +103,7 @@ func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {
 
 	b.Write(c.passwordHash)
 	var paddingLen int
-	if pad := padding.DefaultPaddingFactory.Load().GenerateRecordPayloadSizes(0); len(pad) > 0 {
+	if pad, err := padding.DefaultPaddingFactory.Load().GenerateRecordPayloadSizes(0); err == nil && len(pad) > 0 {
 		paddingLen = pad[0]
 	}
 	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))

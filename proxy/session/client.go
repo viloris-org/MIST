@@ -233,8 +233,9 @@ func (c *Client) idleCleanupExpTime(expTime time.Time) {
 	var sessionToClose []*Session
 
 	c.idleSessionLock.Lock()
-	var activeItems []idleSessionItem
-	for _, item := range c.idleSession.items {
+	items := c.idleSession.items
+	activeItems := items[:0]
+	for _, item := range items {
 		session := item.session
 		if clientDebugSessionPool {
 			logrus.Debugln("check session:", session.seq, expTime, session.idleSince, session.idleUntil)

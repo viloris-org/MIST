@@ -1,18 +1,44 @@
 package padding
 
 import (
-	"mist/util"
 	"crypto/md5"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"MistCore/common/atomic"
+	"mist/util"
 )
 
 const CheckMark = -1
+
+const randomBufferSize = 4096
+
+var globalRandomSource = &randomSource{}
+
+type randomSource struct {
+	mu  sync.Mutex
+	buf [randomBufferSize]byte
+	off int
+}
+
+func (r *randomSource) Uint64() (uint64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.off+8 > len(r.buf) {
+		if _, err := io.ReadFull(rand.Reader, r.buf[:]); err != nil {
+			return 0, err
+		}
+		r.off = 0
+	}
+	v := binary.BigEndian.Uint64(r.buf[r.off : r.off+8])
+	r.off += 8
+	return v, nil
+}
 
 const (
 	MaxPaddingSchemeSize = 64 * 1024
@@ -84,11 +110,11 @@ func NewPaddingFactory(rawScheme []byte) *PaddingFactory {
 	return p
 }
 
-func (p *PaddingFactory) GenerateRecordPayloadSizes(pkt uint32) (pktSizes []int) {
+func (p *PaddingFactory) GenerateRecordPayloadSizes(pkt uint32) ([]int, error) {
 	return p.GenerateRecordPayloadSizesInto(pkt, nil)
 }
 
-func (p *PaddingFactory) GenerateRecordPayloadSizesInto(pkt uint32, pktSizes []int) []int {
+func (p *PaddingFactory) GenerateRecordPayloadSizesInto(pkt uint32, pktSizes []int) ([]int, error) {
 	pktSizes = pktSizes[:0]
 	for _, rule := range p.recordPayloadSizes[pkt] {
 		if rule.checkMark {
@@ -96,10 +122,14 @@ func (p *PaddingFactory) GenerateRecordPayloadSizesInto(pkt uint32, pktSizes []i
 		} else if rule.min == rule.exclusive {
 			pktSizes = append(pktSizes, rule.min)
 		} else {
-			pktSizes = append(pktSizes, rule.min+randomInt(rule.exclusive-rule.min))
+			n, err := randomInt(rule.exclusive - rule.min)
+			if err != nil {
+				return nil, err
+			}
+			pktSizes = append(pktSizes, rule.min+n)
 		}
 	}
-	return pktSizes
+	return pktSizes, nil
 }
 
 func parseRecordPayloadSizes(scheme util.StringMap) (map[uint32][]payloadSizeRule, bool) {
@@ -142,17 +172,16 @@ func parseRecordPayloadSizes(scheme util.StringMap) (map[uint32][]payloadSizeRul
 	return records, true
 }
 
-func randomInt(maxExclusive int) int {
+func randomInt(maxExclusive int) (int, error) {
 	span := uint64(maxExclusive)
 	limit := ^uint64(0) - (^uint64(0) % span)
 	for {
-		var randomBytes [8]byte
-		if _, err := rand.Read(randomBytes[:]); err != nil {
-			return 0
+		value, err := globalRandomSource.Uint64()
+		if err != nil {
+			return 0, err
 		}
-		value := binary.BigEndian.Uint64(randomBytes[:])
 		if value < limit {
-			return int(value % span)
+			return int(value % span), nil
 		}
 	}
 }

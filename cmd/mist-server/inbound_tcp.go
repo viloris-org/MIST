@@ -16,6 +16,7 @@ import (
 	"MistCore/common/buf"
 	"MistCore/common/bufio"
 	M "MistCore/common/metadata"
+	"MistCore/common/uot"
 	"github.com/sirupsen/logrus"
 )
 
@@ -81,7 +82,7 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 			return
 		}
 
-		if strings.Contains(destination.String(), "udp-over-tcp.arpa") {
+		if destination.Fqdn == uot.MagicAddress || destination.Fqdn == uot.LegacyMagicAddress {
 			proxyOutboundUoT(ctx, stream, destination)
 		} else {
 			proxyOutboundTCP(ctx, stream, destination)

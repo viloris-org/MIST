@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"MistCore/common/buf"
@@ -237,6 +238,7 @@ type pipeDeadline struct {
 	mu     sync.Mutex
 	timer  *time.Timer
 	cancel chan struct{}
+	wait   atomic.Value
 }
 
 func (d *pipeDeadline) Set(t time.Time) {
@@ -247,6 +249,7 @@ func (d *pipeDeadline) Set(t time.Time) {
 	}
 	if d.cancel == nil {
 		d.cancel = make(chan struct{})
+		d.wait.Store(d.cancel)
 	}
 	if t.IsZero() {
 		return
@@ -254,6 +257,7 @@ func (d *pipeDeadline) Set(t time.Time) {
 	select {
 	case <-d.cancel:
 		d.cancel = make(chan struct{})
+		d.wait.Store(d.cancel)
 	default:
 	}
 	d.timer = time.AfterFunc(time.Until(t), func() {
@@ -262,9 +266,13 @@ func (d *pipeDeadline) Set(t time.Time) {
 }
 
 func (d *pipeDeadline) Wait() chan struct{} {
+	if ch, ok := d.wait.Load().(chan struct{}); ok {
+		return ch
+	}
 	d.mu.Lock()
 	if d.cancel == nil {
 		d.cancel = make(chan struct{})
+		d.wait.Store(d.cancel)
 	}
 	ch := d.cancel
 	d.mu.Unlock()

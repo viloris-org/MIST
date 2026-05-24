@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const certPinHexLen = sha256.Size * 2
+
 type Options struct {
 	ServerAddr string
 	Password   string
@@ -56,6 +58,9 @@ func (o *Options) Validate() error {
 	if o.Password == "" {
 		return fmt.Errorf("Password is required")
 	}
+	if _, err := parseCertPin(o.TLSCertSHA256); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -66,7 +71,7 @@ func (o *Options) PasswordHash() []byte {
 }
 
 // TLSConfig builds a *tls.Config from the options.
-func (o *Options) TLSConfig() *tls.Config {
+func (o *Options) TLSConfig() (*tls.Config, error) {
 	serverHost, _, err := net.SplitHostPort(o.ServerAddr)
 	if err != nil {
 		serverHost = o.ServerAddr
@@ -86,7 +91,10 @@ func (o *Options) TLSConfig() *tls.Config {
 	}
 
 	if o.TLSCertSHA256 != "" {
-		pin := parseCertPin(o.TLSCertSHA256)
+		pin, err := parseCertPin(o.TLSCertSHA256)
+		if err != nil {
+			return nil, err
+		}
 		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			if len(rawCerts) == 0 {
 				return fmt.Errorf("server did not provide a certificate")
@@ -99,13 +107,22 @@ func (o *Options) TLSConfig() *tls.Config {
 		}
 	}
 
-	return cfg
+	return cfg, nil
 }
 
-func parseCertPin(pin string) []byte {
+func parseCertPin(pin string) ([]byte, error) {
 	pin = strings.TrimSpace(strings.ToLower(pin))
+	if pin == "" {
+		return nil, nil
+	}
 	pin = strings.TrimPrefix(pin, "sha256:")
 	pin = strings.ReplaceAll(pin, ":", "")
-	decoded, _ := hex.DecodeString(pin)
-	return decoded
+	if len(pin) != certPinHexLen {
+		return nil, fmt.Errorf("TLSCertSHA256 must be a %d-character SHA-256 hex string", certPinHexLen)
+	}
+	decoded, err := hex.DecodeString(pin)
+	if err != nil {
+		return nil, fmt.Errorf("TLSCertSHA256 must be valid hex: %w", err)
+	}
+	return decoded, nil
 }

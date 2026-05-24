@@ -1,8 +1,6 @@
 package session
 
 import (
-	"mist/proxy/padding"
-	"mist/util"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
@@ -12,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"os"
@@ -23,6 +22,8 @@ import (
 	"MistCore/common/atomic"
 	"MistCore/common/buf"
 	"github.com/sirupsen/logrus"
+	"mist/proxy/padding"
+	"mist/util"
 )
 
 const (
@@ -58,22 +59,23 @@ type Session struct {
 	peerVersion byte
 
 	// client
-	isClient    bool
-	sendPadding bool
-	buffering   bool
-	buffer      []byte
-	writeBuffer []byte
-	paddingBuf  []int
-	pktCounter  atomic.Uint32
+	isClient           bool
+	sendPadding        bool
+	buffering          bool
+	buffer             []byte
+	writeBuffer        []byte
+	paddingWriteBuffer []byte
+	paddingBuf         []int
+	pktCounter         atomic.Uint32
 
 	// server
 	onNewStream func(stream *Stream)
 
 	// hardening
-	maxStreams       int
-	readTimeout      time.Duration
+	maxStreams        int
+	readTimeout       time.Duration
 	keepaliveInterval time.Duration
-	lastRecv         time.Time
+	lastRecv          time.Time
 
 	// v3 security
 	passwordHash     []byte
@@ -81,9 +83,11 @@ type Session struct {
 	authComplete     chan struct{}
 	nonce            []byte
 	hmacKey          []byte
+	hmacPool         sync.Pool
 	hmacMode         bool
 	authHash         []byte
 	hmacBuf          [4]byte
+	hmacTrailerBuf   [hmacTrailerLen]byte
 	pendingPing      bool
 
 	// SYN rate limit
@@ -415,7 +419,7 @@ func (s *Session) recvLoop() error {
 									return err
 								}
 								s.nonce = nonceBytes[:]
-								s.hmacKey = deriveHMACKey(s.passwordHash, s.nonce)
+								s.setHMACKey(deriveHMACKey(s.passwordHash, s.nonce))
 								authMac := hmac.New(sha256.New, s.nonce)
 								authMac.Write(s.passwordHash)
 								s.authHash = authMac.Sum(nil)
@@ -484,7 +488,7 @@ func (s *Session) recvLoop() error {
 								if nonceHex, ok := m["nonce"]; ok {
 									if nonceBytes, err := hex.DecodeString(nonceHex); err == nil && len(nonceBytes) == 32 {
 										s.nonce = nonceBytes
-										s.hmacKey = deriveHMACKey(s.passwordHash, s.nonce)
+										s.setHMACKey(deriveHMACKey(s.passwordHash, s.nonce))
 										s.hmacMode = true
 										authMac := hmac.New(sha256.New, s.nonce)
 										authMac.Write(s.passwordHash)
@@ -629,12 +633,12 @@ func (s *Session) writeControlFrame(frame frame) (int, error) {
 }
 
 func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
-	var trailer []byte
+	trailerLen := 0
 	if s.hmacMode && !isHandshakeFrame(cmd) {
-		trailer = s.computeFrameHMAC(cmd, sid, data)
+		trailerLen = s.computeFrameHMAC(s.hmacTrailerBuf[:], cmd, sid, data)
 	}
 
-	wirePayloadLen := len(data) + len(trailer)
+	wirePayloadLen := len(data) + trailerLen
 	frameLen := wirePayloadLen + headerOverHeadSize
 
 	s.connLock.Lock()
@@ -648,8 +652,8 @@ func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
 	binary.BigEndian.PutUint32(frame[1:5], sid)
 	binary.BigEndian.PutUint16(frame[5:7], uint16(wirePayloadLen))
 	copy(frame[headerOverHeadSize:], data)
-	if len(trailer) > 0 {
-		copy(frame[headerOverHeadSize+len(data):], trailer)
+	if trailerLen > 0 {
+		copy(frame[headerOverHeadSize+len(data):], s.hmacTrailerBuf[:trailerLen])
 	}
 
 	n, err := s.writeConnLocked(frame)
@@ -686,10 +690,20 @@ func (s *Session) writeConnLocked(b []byte) (n int, err error) {
 		pkt := s.pktCounter.Add(1)
 		paddingF := s.padding.Load()
 		if pkt < paddingF.Stop {
-			pktSizes := paddingF.GenerateRecordPayloadSizesInto(pkt, s.paddingBuf)
+			pktSizes, genErr := paddingF.GenerateRecordPayloadSizesInto(pkt, s.paddingBuf)
+			if genErr != nil {
+				s.sendPadding = false
+				return s.conn.Write(b)
+			}
 			s.paddingBuf = pktSizes
+
+			payload := b
+			if cap(s.paddingWriteBuffer) < len(b)+headerOverHeadSize+padding.MaxRecordPayloadSize {
+				s.paddingWriteBuffer = make([]byte, 0, len(b)+headerOverHeadSize+padding.MaxRecordPayloadSize)
+			}
+			out := s.paddingWriteBuffer[:0]
 			for _, l := range pktSizes {
-				remainPayloadLen := len(b)
+				remainPayloadLen := len(payload)
 				if l == padding.CheckMark {
 					if remainPayloadLen == 0 {
 						break
@@ -699,38 +713,29 @@ func (s *Session) writeConnLocked(b []byte) (n int, err error) {
 				}
 				// logrus.Debugln(pkt, "write", l, "len", remainPayloadLen, "remain", remainPayloadLen-l)
 				if remainPayloadLen > l { // this packet is all payload
-					_, err = s.conn.Write(b[:l])
-					if err != nil {
-						return 0, err
-					}
+					out = append(out, payload[:l]...)
 					n += l
-					b = b[l:]
+					payload = payload[l:]
 				} else if remainPayloadLen > 0 { // this packet contains padding and the last part of payload
 					paddingLen := l - remainPayloadLen - headerOverHeadSize
+					out = append(out, payload...)
 					if paddingLen > 0 {
-						b = s.dataWithWasteFrame(b, paddingLen)
-					}
-					_, err = s.conn.Write(b)
-					if err != nil {
-						return 0, err
+						out = appendWasteFrame(out, paddingLen)
 					}
 					n += remainPayloadLen
-					b = nil
+					payload = nil
 				} else { // this packet is all padding
-					_, err = s.conn.Write(s.wasteFrame(l))
-					if err != nil {
-						return 0, err
-					}
-					b = nil
+					out = appendWasteFrame(out, l)
+					payload = nil
 				}
 			}
 			// maybe still remain payload to write
-			if len(b) == 0 {
-				return
-			} else {
-				n2, err := s.conn.Write(b)
-				return n + n2, err
+			if len(payload) > 0 {
+				out = append(out, payload...)
 			}
+			s.paddingWriteBuffer = out
+			_, err = s.conn.Write(out)
+			return n, err
 		} else {
 			s.sendPadding = false
 		}
@@ -768,6 +773,32 @@ func (s *Session) fillWasteFrame(frame []byte, paddingLen int) {
 	clear(frame[headerOverHeadSize:])
 }
 
+func appendWasteFrame(dst []byte, paddingLen int) []byte {
+	frameLen := headerOverHeadSize + paddingLen
+	off := len(dst)
+	dst = dst[:off+frameLen]
+	frame := dst[off:]
+	frame[0] = cmdWaste
+	binary.BigEndian.PutUint32(frame[1:5], 0)
+	binary.BigEndian.PutUint16(frame[5:7], uint16(paddingLen))
+	clear(frame[headerOverHeadSize:])
+	return dst
+}
+
+func (s *Session) setHMACKey(key []byte) {
+	s.hmacKey = key
+	if len(key) == 0 {
+		s.hmacPool = sync.Pool{}
+		return
+	}
+	poolKey := append([]byte(nil), key...)
+	s.hmacPool = sync.Pool{
+		New: func() any {
+			return hmac.New(sha256.New, poolKey)
+		},
+	}
+}
+
 func deriveHMACKey(passwordHash, nonce []byte) []byte {
 	h := sha256.New()
 	h.Write([]byte("mist-frame-mac-v3"))
@@ -784,18 +815,26 @@ func isHandshakeFrame(cmd byte) bool {
 	return false
 }
 
-func (s *Session) computeFrameHMAC(cmd byte, sid uint32, payload []byte) []byte {
+func (s *Session) appendFrameHMAC(dst []byte, cmd byte, sid uint32, payload []byte) []byte {
 	if len(s.hmacKey) == 0 {
-		return nil
+		return dst[:0]
 	}
-	mac := hmac.New(sha256.New, s.hmacKey)
-	mac.Write([]byte{cmd})
+	mac := s.hmacPool.Get().(hash.Hash)
+	defer s.hmacPool.Put(mac)
+	mac.Reset()
+	var cmdBuf [1]byte
+	cmdBuf[0] = cmd
+	mac.Write(cmdBuf[:])
 	binary.BigEndian.PutUint32(s.hmacBuf[:], sid)
 	mac.Write(s.hmacBuf[:])
 	binary.BigEndian.PutUint16(s.hmacBuf[:2], uint16(len(payload)))
 	mac.Write(s.hmacBuf[:2])
 	mac.Write(payload)
-	return mac.Sum(nil)
+	return mac.Sum(dst[:0])
+}
+
+func (s *Session) computeFrameHMAC(dst []byte, cmd byte, sid uint32, payload []byte) int {
+	return len(s.appendFrameHMAC(dst[:0], cmd, sid, payload))
 }
 
 func (s *Session) drainFramePayload(hdr rawHeader) error {
@@ -811,7 +850,8 @@ func (s *Session) drainFramePayload(hdr rawHeader) error {
 			return err
 		}
 		payloadLen := wireLen - hmacTrailerLen
-		expectedMAC := s.computeFrameHMAC(hdr.Cmd(), hdr.StreamID(), buffer[:payloadLen])
+		var macBuf [hmacTrailerLen]byte
+		expectedMAC := s.appendFrameHMAC(macBuf[:0], hdr.Cmd(), hdr.StreamID(), buffer[:payloadLen])
 		if subtle.ConstantTimeCompare(expectedMAC, buffer[payloadLen:]) != 1 {
 			return errors.New("HMAC verification failed")
 		}
@@ -839,7 +879,8 @@ func (s *Session) readFramePayload(hdr rawHeader) ([]byte, error) {
 		}
 		payloadLen := wireLen - hmacTrailerLen
 		payload := buffer[:payloadLen]
-		expectedMAC := s.computeFrameHMAC(cmd, hdr.StreamID(), payload)
+		var macBuf [hmacTrailerLen]byte
+		expectedMAC := s.appendFrameHMAC(macBuf[:0], cmd, hdr.StreamID(), payload)
 		actualMAC := buffer[payloadLen:]
 		if subtle.ConstantTimeCompare(expectedMAC, actualMAC) != 1 {
 			buf.Put(buffer)
