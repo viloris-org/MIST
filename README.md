@@ -192,7 +192,7 @@ If you deploy MIST on infrastructure provided by third parties (cloud providers,
 
 ### Reporting
 
-To report a security vulnerability, please open a private security advisory on the GitHub repository. For other concerns, contact the maintainers through the project's official channels.
+To report a security vulnerability, please open a private security advisory on the GitHub repository or email <connect@viloris.org>. For other concerns, contact the maintainers through the project's official channels.
 
 ---
 
