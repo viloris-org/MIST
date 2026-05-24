@@ -137,6 +137,21 @@ msg() {
     esac
 }
 
+if [ -t 0 ]; then
+    INPUT_TTY="/dev/stdin"
+elif [ -r /dev/tty ]; then
+    INPUT_TTY="/dev/tty"
+else
+    echo -e "${RED}[ERROR]${NC} This installer requires an interactive terminal."
+    exit 1
+fi
+
+ask() {
+    local prompt="$1"
+    local var_name="$2"
+    read -r -p "$prompt" "$var_name" < "$INPUT_TTY"
+}
+
 detect_platform() {
     case "$(uname -s)" in
         Linux) ;;
@@ -209,12 +224,12 @@ fi
 echo -e "\n${BLUE}[2/4]${NC} $(msg config_collect)"
 
 # 3.1 监听端口
-read -p "$(msg prompt_port) [$(msg default): 8443]: " input_port
+ask "$(msg prompt_port) [$(msg default): 8443]: " input_port
 PORT=${input_port:-8443}
 
 # 3.2 密码配置
 default_pw=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
-read -p "$(msg prompt_pw) [$(msg default_random): $default_pw]: " input_pw
+ask "$(msg prompt_pw) [$(msg default_random): $default_pw]: " input_pw
 PASSWORD=${input_pw:-$default_pw}
 
 # 3.3 证书模式选择
@@ -222,7 +237,7 @@ echo -e "\n$(msg cert_mode_title)"
 echo -e "  ${CYAN}[1]${NC} $(msg cert_mode_self)"
 echo -e "  ${CYAN}[2]${NC} $(msg cert_mode_acme)"
 echo -e "  ${CYAN}[3]${NC} $(msg cert_mode_custom)"
-read -p "$(msg prompt_choice) [1-3, $(msg default) 1]: " mode_choice
+ask "$(msg prompt_choice) [1-3, $(msg default) 1]: " mode_choice
 
 CERT_TYPE="self-signed"
 CERT_NAME=""
@@ -235,48 +250,48 @@ KEY_FILE=""
 case $mode_choice in
     2)
         CERT_TYPE="acme"
-        read -p "$(msg prompt_domain): " cert_domain
+        ask "$(msg prompt_domain): " cert_domain
         while [ -z "$cert_domain" ]; do
-            read -p "${RED}[ERROR]${NC} $(msg err_acme_domain): " cert_domain
+            ask "${RED}[ERROR]${NC} $(msg err_acme_domain): " cert_domain
         done
         CERT_NAME="$cert_domain"
 
-        read -p "$(msg prompt_acme_port) [$(msg default) :80]: " input_acme_http
+        ask "$(msg prompt_acme_port) [$(msg default) :80]: " input_acme_http
         ACME_HTTP=${input_acme_http:-:80}
 
-        read -p "$(msg prompt_acme_cache) [$(msg default) cert-cache]: " input_acme_cache
+        ask "$(msg prompt_acme_cache) [$(msg default) cert-cache]: " input_acme_cache
         ACME_CACHE=${input_acme_cache:-cert-cache}
 
-        read -p "$(msg prompt_acme_email): " ACME_EMAIL
+        ask "$(msg prompt_acme_email): " ACME_EMAIL
         ;;
     3)
         CERT_TYPE="custom"
-        read -p "$(msg prompt_cert_path): " input_cert_file
+        ask "$(msg prompt_cert_path): " input_cert_file
         while [ ! -f "$input_cert_file" ]; do
-            read -p "${RED}[$(msg err_file_not_found)]${NC} $(msg prompt_cert_path): " input_cert_file
+            ask "${RED}[$(msg err_file_not_found)]${NC} $(msg prompt_cert_path): " input_cert_file
         done
         CERT_FILE="$input_cert_file"
 
-        read -p "$(msg prompt_key_path): " input_key_file
+        ask "$(msg prompt_key_path): " input_key_file
         while [ ! -f "$input_key_file" ]; do
-            read -p "${RED}[$(msg err_file_not_found)]${NC} $(msg prompt_key_path): " input_key_file
+            ask "${RED}[$(msg err_file_not_found)]${NC} $(msg prompt_key_path): " input_key_file
         done
         KEY_FILE="$input_key_file"
         ;;
     *)
         CERT_TYPE="self-signed"
-        read -p "$(msg prompt_self_name): " input_cert_name
+        ask "$(msg prompt_self_name): " input_cert_name
         CERT_NAME="$input_cert_name"
         ;;
 esac
 
 # 3.4 探测回落配置 (Fallback)
-read -p "$(msg prompt_fallback): " input_fallback
+ask "$(msg prompt_fallback): " input_fallback
 FALLBACK="$input_fallback"
 
 # 4. 设置自启动或独立启动
 echo -e "\n${BLUE}[3/4]${NC} $(msg service_config)"
-read -p "$(msg prompt_systemd) [$(msg default): y]: " is_systemd
+ask "$(msg prompt_systemd) [$(msg default): y]: " is_systemd
 IS_SYSTEMD_CONFIRM=${is_systemd:-y}
 if [[ "$IS_SYSTEMD_CONFIRM" =~ ^[Yy]$ ]]; then
     echo -e "$(msg installing_systemd)"
