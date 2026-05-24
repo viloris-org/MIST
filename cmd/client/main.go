@@ -30,6 +30,7 @@ func main() {
 	tlsCertSha256 := flag.String("tls-cert-sha256", "", "expected server certificate SHA-256 fingerprint")
 	insecure := flag.Bool("insecure", false, "allow insecure TLS connection")
 	minIdleSession := flag.Int("m", 5, "Reserved min idle session")
+	tlsMinVersionStr := flag.String("tls-min-version", "1.2", "minimum TLS version (1.2 or 1.3)")
 	flag.Parse()
 
 	if serverURL, err := url.Parse(*serverAddr); err == nil {
@@ -68,6 +69,16 @@ func main() {
 	var sum = sha256.Sum256([]byte(*password))
 	passwordSha256 = sum[:]
 
+	var tlsMinVersion uint16 = tls.VersionTLS12
+	switch *tlsMinVersionStr {
+	case "1.3":
+		tlsMinVersion = tls.VersionTLS13
+	case "1.2":
+		tlsMinVersion = tls.VersionTLS12
+	default:
+		logrus.Fatalln("tls-min-version must be 1.2 or 1.3")
+	}
+
 	logrus.Infoln("[Client]", util.ProgramVersionName)
 	logrus.Infoln("[Client] socks5/http", *listen, "=>", *serverAddr)
 
@@ -79,7 +90,7 @@ func main() {
 	tlsConfig := &tls.Config{
 		ServerName:         serverNameForTLS(serverHost, *sni),
 		InsecureSkipVerify: *insecure || *tlsCertSha256 != "",
-		MinVersion:         tls.VersionTLS12,
+		MinVersion:         tlsMinVersion,
 		ClientSessionCache: tls.NewLRUClientSessionCache(64),
 	}
 	if *tlsCertSha256 != "" {
@@ -115,7 +126,7 @@ func main() {
 		}
 		conn = tls.Client(conn, tlsConfig)
 		return conn, nil
-	}, *minIdleSession)
+	}, *minIdleSession, 0, 0, 0, 0, passwordSha256)
 
 	for {
 		c, err := listener.Accept()

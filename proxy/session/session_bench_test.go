@@ -22,7 +22,7 @@ func newBenchSession(b *testing.B, enablePadding bool) *Session {
 		_, _ = io.Copy(io.Discard, remote)
 	}()
 
-	s := NewClientSession(local, &padding.DefaultPaddingFactory)
+	s := NewClientSession(local, &padding.DefaultPaddingFactory, 0, 0, 0, 0, nil)
 	s.sendPadding = enablePadding
 	return s
 }

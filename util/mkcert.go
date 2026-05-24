@@ -1,8 +1,9 @@
 package util
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -16,7 +17,7 @@ func GenerateKeyPair(timeFunc func() time.Time, serverName string) (*tls.Certifi
 	if timeFunc == nil {
 		timeFunc = time.Now
 	}
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
@@ -24,11 +25,12 @@ func GenerateKeyPair(timeFunc func() time.Time, serverName string) (*tls.Certifi
 	if err != nil {
 		return nil, err
 	}
+	now := timeFunc()
 	template := &x509.Certificate{
 		SerialNumber:          serialNumber,
-		NotBefore:             timeFunc().Add(time.Hour * -1),
-		NotAfter:              timeFunc().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		NotBefore:             now.Add(-1 * time.Hour),
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		Subject: pkix.Name{

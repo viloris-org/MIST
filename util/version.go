@@ -1,3 +1,3 @@
 package util
 
-var ProgramVersionName = "mist/0.0.12"
+var ProgramVersionName = "mist/0.0.1"

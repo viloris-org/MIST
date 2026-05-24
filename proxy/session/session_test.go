@@ -24,7 +24,7 @@ func (c *recordingConn) Write(b []byte) (int, error)      { return c.Buffer.Writ
 
 func TestWriteDataFrameSplitsLargePayload(t *testing.T) {
 	conn := &recordingConn{}
-	s := NewClientSession(conn, &padding.DefaultPaddingFactory)
+	s := NewClientSession(conn, &padding.DefaultPaddingFactory, 0, 0, 0, 0, nil)
 	s.sendPadding = false
 
 	payload := bytes.Repeat([]byte{0x1}, maxFramePayloadLen+10)
@@ -50,7 +50,7 @@ func TestWriteDataFrameSplitsLargePayload(t *testing.T) {
 
 func TestWriteControlFrameRejectsOversizedPayload(t *testing.T) {
 	conn := &recordingConn{}
-	s := NewClientSession(conn, &padding.DefaultPaddingFactory)
+	s := NewClientSession(conn, &padding.DefaultPaddingFactory, 0, 0, 0, 0, nil)
 
 	_, err := s.writeControlFrame(frame{cmd: cmdAlert, data: make([]byte, maxFramePayloadLen+1)})
 	if err == nil {

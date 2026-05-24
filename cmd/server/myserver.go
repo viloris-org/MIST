@@ -2,17 +2,28 @@ package main
 
 import (
 	"crypto/tls"
+	"time"
 )
 
 type myServer struct {
-	tlsConfig    *tls.Config
-	fallbackAddr string
+	tlsConfig         *tls.Config
+	fallbackAddr      string
+	maxStreams        int
+	readTimeout       time.Duration
+	keepaliveInterval time.Duration
+	synRateLimit      int
+	passwordHash      []byte
 }
 
-func NewMyServer(tlsConfig *tls.Config, fallbackAddr string) *myServer {
+func NewMyServer(tlsConfig *tls.Config, fallbackAddr string, maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *myServer {
 	s := &myServer{
-		tlsConfig:    tlsConfig,
-		fallbackAddr: fallbackAddr,
+		tlsConfig:         tlsConfig,
+		fallbackAddr:      fallbackAddr,
+		maxStreams:        maxStreams,
+		readTimeout:       readTimeout,
+		keepaliveInterval: keepaliveInterval,
+		synRateLimit:      synRateLimit,
+		passwordHash:      passwordHash,
 	}
 	return s
 }

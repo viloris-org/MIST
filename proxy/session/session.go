@@ -3,8 +3,13 @@ package session
 import (
 	"mist/proxy/padding"
 	"mist/util"
+	"crypto/hmac"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +23,11 @@ import (
 	"MistCore/common/atomic"
 	"MistCore/common/buf"
 	"github.com/sirupsen/logrus"
+)
+
+const (
+	hmacTrailerLen      = 32
+	effectiveMaxPayload = maxFramePayloadLen - hmacTrailerLen
 )
 
 var clientDebugPaddingScheme = os.Getenv("CLIENT_DEBUG_PADDING_SCHEME") == "1"
@@ -58,27 +68,61 @@ type Session struct {
 
 	// server
 	onNewStream func(stream *Stream)
+
+	// hardening
+	maxStreams       int
+	readTimeout      time.Duration
+	keepaliveInterval time.Duration
+	lastRecv         time.Time
+
+	// v3 security
+	passwordHash     []byte
+	settingsReceived chan struct{}
+	authComplete     chan struct{}
+	nonce            []byte
+	hmacKey          []byte
+	hmacMode         bool
+	authHash         []byte
+	hmacBuf          [4]byte
+	pendingPing      bool
+
+	// SYN rate limit
+	synCount       int
+	synWindowStart time.Time
+	synRateLimit   int
 }
 
-func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.PaddingFactory]) *Session {
+func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
 	s := &Session{
-		conn:        conn,
-		isClient:    true,
-		sendPadding: true,
-		padding:     _padding,
-		writeBuffer: make([]byte, headerOverHeadSize+maxFramePayloadLen),
+		conn:              conn,
+		isClient:          true,
+		sendPadding:       true,
+		padding:           _padding,
+		writeBuffer:       make([]byte, headerOverHeadSize+maxFramePayloadLen),
+		maxStreams:        maxStreams,
+		readTimeout:       readTimeout,
+		keepaliveInterval: keepaliveInterval,
+		synRateLimit:      synRateLimit,
+		passwordHash:      passwordHash,
+		settingsReceived:  make(chan struct{}),
 	}
 	s.die = make(chan struct{})
 	s.streams = make(map[uint32]*Stream)
 	return s
 }
 
-func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding *atomic.TypedValue[*padding.PaddingFactory]) *Session {
+func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
 	s := &Session{
-		conn:        conn,
-		onNewStream: onNewStream,
-		padding:     _padding,
-		writeBuffer: make([]byte, headerOverHeadSize+maxFramePayloadLen),
+		conn:              conn,
+		onNewStream:       onNewStream,
+		padding:           _padding,
+		writeBuffer:       make([]byte, headerOverHeadSize+maxFramePayloadLen),
+		maxStreams:        maxStreams,
+		readTimeout:       readTimeout,
+		keepaliveInterval: keepaliveInterval,
+		synRateLimit:      synRateLimit,
+		passwordHash:      passwordHash,
+		authComplete:      make(chan struct{}),
 	}
 	s.die = make(chan struct{})
 	s.streams = make(map[uint32]*Stream)
@@ -86,13 +130,17 @@ func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding 
 }
 
 func (s *Session) Run() {
+	if s.keepaliveInterval > 0 {
+		go s.keepaliveLoop()
+	}
+
 	if !s.isClient {
 		s.recvLoop()
 		return
 	}
 
 	settings := util.StringMap{
-		"v":           "2",
+		"v":           "3",
 		"client":      util.ProgramVersionName,
 		"padding-md5": s.padding.Load().Md5,
 	}
@@ -144,6 +192,15 @@ func (s *Session) OpenStream() (*Stream, error) {
 		return nil, io.ErrClosedPipe
 	}
 
+	// v3 client: wait for server settings (nonce) before opening streams
+	if s.settingsReceived != nil {
+		select {
+		case <-s.settingsReceived:
+		case <-s.die:
+			return nil, io.ErrClosedPipe
+		}
+	}
+
 	sid := s.streamId.Add(1)
 	stream := newStream(sid, s)
 
@@ -177,6 +234,25 @@ func (s *Session) OpenStream() (*Stream, error) {
 	}
 }
 
+func (s *Session) keepaliveLoop() {
+	ticker := time.NewTicker(s.keepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if s.pendingPing {
+				logrus.Debugln("keepalive timeout, closing session")
+				s.Close()
+				return
+			}
+			s.pendingPing = true
+			s.writeControlFrame(newFrame(cmdHeartRequest, 0))
+		case <-s.die:
+			return
+		}
+	}
+}
+
 func (s *Session) recvLoop() error {
 	defer func() {
 		if r := recover(); r != nil {
@@ -193,34 +269,70 @@ func (s *Session) recvLoop() error {
 			return io.ErrClosedPipe
 		}
 		// read header first
+		if s.readTimeout > 0 {
+			s.conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+		}
 		if _, err := io.ReadFull(s.conn, hdr[:]); err == nil {
+			s.lastRecv = time.Now()
 			sid := hdr.StreamID()
 			switch hdr.Cmd() {
 			case cmdPSH:
-				if hdr.Length() > 0 {
-					buffer := buf.Get(int(hdr.Length()))
-					if _, err := io.ReadFull(s.conn, buffer); err == nil {
-						s.streamLock.RLock()
-						stream, ok := s.streams[sid]
-						s.streamLock.RUnlock()
-						if ok {
-							stream.deliverData(buffer)
-						} else {
-							buf.Put(buffer)
-						}
+				buffer, err := s.readFramePayload(hdr)
+				if err != nil {
+					return err
+				}
+				if len(buffer) > 0 {
+					s.streamLock.RLock()
+					stream, ok := s.streams[sid]
+					s.streamLock.RUnlock()
+					if ok {
+						stream.deliverData(buffer)
 					} else {
 						buf.Put(buffer)
-						return err
 					}
 				}
 			case cmdSYN: // should be server only
+				if err := s.drainFramePayload(hdr); err != nil {
+					return err
+				}
 				if !s.isClient && !receivedSettingsFromClient {
 					f := newFrame(cmdAlert, 0)
 					f.data = []byte("client did not send its settings")
 					s.writeControlFrame(f)
 					return nil
 				}
+				if !s.isClient && s.peerVersion >= 3 && s.authComplete != nil {
+					select {
+					case <-s.authComplete:
+					default:
+						f := newFrame(cmdAlert, 0)
+						f.data = []byte("not authenticated")
+						s.writeControlFrame(f)
+						return nil
+					}
+				}
+				if s.synRateLimit > 0 {
+					now := time.Now()
+					if now.Sub(s.synWindowStart) > time.Second {
+						s.synCount = 0
+						s.synWindowStart = now
+					}
+					s.synCount++
+					if s.synCount > s.synRateLimit {
+						f := newFrame(cmdAlert, 0)
+						f.data = []byte("SYN rate exceeded")
+						s.writeControlFrame(f)
+						return nil
+					}
+				}
 				s.streamLock.Lock()
+				if s.maxStreams > 0 && len(s.streams) >= s.maxStreams {
+					s.streamLock.Unlock()
+					f := newFrame(cmdAlert, 0)
+					f.data = []byte("max streams exceeded")
+					s.writeControlFrame(f)
+					return nil
+				}
 				if _, ok := s.streams[sid]; !ok {
 					stream := newStream(sid, s)
 					s.streams[sid] = stream
@@ -240,13 +352,11 @@ func (s *Session) recvLoop() error {
 					s.synDone = nil
 				}
 				s.synDoneLock.Unlock()
-				if hdr.Length() > 0 {
-					buffer := buf.Get(int(hdr.Length()))
-					if _, err := io.ReadFull(s.conn, buffer); err != nil {
-						buf.Put(buffer)
-						return err
-					}
-					// report error
+				buffer, err := s.readFramePayload(hdr)
+				if err != nil {
+					return err
+				}
+				if len(buffer) > 0 {
 					s.streamLock.RLock()
 					stream, ok := s.streams[sid]
 					s.streamLock.RUnlock()
@@ -256,6 +366,9 @@ func (s *Session) recvLoop() error {
 					buf.Put(buffer)
 				}
 			case cmdFIN:
+				if err := s.drainFramePayload(hdr); err != nil {
+					return err
+				}
 				s.streamLock.Lock()
 				stream, ok := s.streams[sid]
 				delete(s.streams, sid)
@@ -263,7 +376,6 @@ func (s *Session) recvLoop() error {
 				if ok {
 					stream.closeLocally()
 				}
-				//logrus.Debugln("stream fin", sid, s.streams)
 			case cmdWaste:
 				if hdr.Length() > 0 {
 					if _, err := io.CopyN(io.Discard, s.conn, int64(hdr.Length())); err != nil {
@@ -271,12 +383,11 @@ func (s *Session) recvLoop() error {
 					}
 				}
 			case cmdSettings:
-				if hdr.Length() > 0 {
-					buffer := buf.Get(int(hdr.Length()))
-					if _, err := io.ReadFull(s.conn, buffer); err != nil {
-						buf.Put(buffer)
-						return err
-					}
+				buffer, err := s.readFramePayload(hdr)
+				if err != nil {
+					return err
+				}
+				if len(buffer) > 0 {
 					if !s.isClient {
 						receivedSettingsFromClient = true
 						m := util.StringMapFromBytes(buffer)
@@ -294,11 +405,24 @@ func (s *Session) recvLoop() error {
 						// check client's version
 						if v, err := strconv.Atoi(m["v"]); err == nil && v >= 2 {
 							s.peerVersion = byte(v)
-							// send cmdServerSettings
+							serverSettings := util.StringMap{
+								"v": strconv.Itoa(v),
+							}
+							if v >= 3 {
+								var nonceBytes [32]byte
+								if _, err := rand.Read(nonceBytes[:]); err != nil {
+									buf.Put(buffer)
+									return err
+								}
+								s.nonce = nonceBytes[:]
+								s.hmacKey = deriveHMACKey(s.passwordHash, s.nonce)
+								authMac := hmac.New(sha256.New, s.nonce)
+								authMac.Write(s.passwordHash)
+								s.authHash = authMac.Sum(nil)
+								serverSettings["nonce"] = hex.EncodeToString(nonceBytes[:])
+							}
 							f := newFrame(cmdServerSettings, 0)
-							f.data = util.StringMap{
-								"v": "2",
-							}.ToBytes()
+							f.data = serverSettings.ToBytes()
 							_, err = s.writeControlFrame(f)
 							if err != nil {
 								buf.Put(buffer)
@@ -309,21 +433,19 @@ func (s *Session) recvLoop() error {
 					buf.Put(buffer)
 				}
 			case cmdAlert:
-				if hdr.Length() > 0 {
-					buffer := buf.Get(int(hdr.Length()))
-					if _, err := io.ReadFull(s.conn, buffer); err != nil {
-						buf.Put(buffer)
-						return err
-					}
+				buffer, err := s.readFramePayload(hdr)
+				if err != nil {
+					return err
+				}
+				if len(buffer) > 0 {
 					if s.isClient {
 						logrus.Errorln("[Alert from server]", string(buffer))
 					}
 					buf.Put(buffer)
-					return nil
 				}
+				return nil
 			case cmdUpdatePaddingScheme:
 				if hdr.Length() > 0 {
-					// `rawScheme` Do not use buffer to prevent subsequent misuse
 					rawScheme := make([]byte, int(hdr.Length()))
 					if _, err := io.ReadFull(s.conn, rawScheme); err != nil {
 						return err
@@ -337,26 +459,78 @@ func (s *Session) recvLoop() error {
 					}
 				}
 			case cmdHeartRequest:
+				if err := s.drainFramePayload(hdr); err != nil {
+					return err
+				}
 				if _, err := s.writeControlFrame(newFrame(cmdHeartResponse, sid)); err != nil {
 					return err
 				}
 			case cmdHeartResponse:
-				// Active keepalive checking is not implemented yet
-				break
+				if err := s.drainFramePayload(hdr); err != nil {
+					return err
+				}
+				s.pendingPing = false
 			case cmdServerSettings:
-				if hdr.Length() > 0 {
-					buffer := buf.Get(int(hdr.Length()))
-					if _, err := io.ReadFull(s.conn, buffer); err != nil {
-						buf.Put(buffer)
-						return err
-					}
+				buffer, err := s.readFramePayload(hdr)
+				if err != nil {
+					return err
+				}
+				if len(buffer) > 0 {
 					if s.isClient {
-						// check server's version
 						m := util.StringMapFromBytes(buffer)
 						if v, err := strconv.Atoi(m["v"]); err == nil {
 							s.peerVersion = byte(v)
+							if v >= 3 {
+								if nonceHex, ok := m["nonce"]; ok {
+									if nonceBytes, err := hex.DecodeString(nonceHex); err == nil && len(nonceBytes) == 32 {
+										s.nonce = nonceBytes
+										s.hmacKey = deriveHMACKey(s.passwordHash, s.nonce)
+										s.hmacMode = true
+										authMac := hmac.New(sha256.New, s.nonce)
+										authMac.Write(s.passwordHash)
+										f := newFrame(cmdAuthProof, 0)
+										f.data = authMac.Sum(nil)
+										s.writeControlFrame(f)
+									}
+								}
+							}
+						}
+						if s.settingsReceived != nil {
+							close(s.settingsReceived)
 						}
 					}
+					buf.Put(buffer)
+				}
+			case cmdAuthProof:
+				buffer, err := s.readFramePayload(hdr)
+				if err != nil {
+					return err
+				}
+				if !s.isClient {
+					var valid bool
+					if len(buffer) >= 32 && len(s.authHash) == 32 {
+						proof := buffer[:32]
+						if subtle.ConstantTimeCompare(proof, s.authHash) == 1 {
+							valid = true
+						}
+					}
+					if valid {
+						s.hmacMode = true
+						if s.authComplete != nil {
+							close(s.authComplete)
+						}
+						logrus.Debugln("v3 auth proof validated")
+					} else {
+						if len(buffer) > 0 {
+							buf.Put(buffer)
+						}
+						f := newFrame(cmdAlert, 0)
+						f.data = []byte("authentication failed")
+						s.writeControlFrame(f)
+						return errors.New("v3 auth failed")
+					}
+				}
+				if len(buffer) > 0 {
 					buf.Put(buffer)
 				}
 			default:
@@ -380,10 +554,14 @@ func (s *Session) streamClosed(sid uint32) error {
 }
 
 func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
-	if s.sendPadding {
+	if s.sendPadding || s.hmacMode {
+		chunkMax := maxFramePayloadLen
+		if s.hmacMode {
+			chunkMax = effectiveMaxPayload
+		}
 		total := 0
 		for len(data) > 0 {
-			chunkLen := min(len(data), maxFramePayloadLen)
+			chunkLen := min(len(data), chunkMax)
 			if err := s.writePSHFrame(sid, data[:chunkLen]); err != nil {
 				return total, err
 			}
@@ -451,7 +629,13 @@ func (s *Session) writeControlFrame(frame frame) (int, error) {
 }
 
 func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
-	frameLen := len(data) + headerOverHeadSize
+	var trailer []byte
+	if s.hmacMode && !isHandshakeFrame(cmd) {
+		trailer = s.computeFrameHMAC(cmd, sid, data)
+	}
+
+	wirePayloadLen := len(data) + len(trailer)
+	frameLen := wirePayloadLen + headerOverHeadSize
 
 	s.connLock.Lock()
 	defer s.connLock.Unlock()
@@ -462,8 +646,11 @@ func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
 	frame := s.writeBuffer[:frameLen]
 	frame[0] = cmd
 	binary.BigEndian.PutUint32(frame[1:5], sid)
-	binary.BigEndian.PutUint16(frame[5:7], uint16(len(data)))
+	binary.BigEndian.PutUint16(frame[5:7], uint16(wirePayloadLen))
 	copy(frame[headerOverHeadSize:], data)
+	if len(trailer) > 0 {
+		copy(frame[headerOverHeadSize+len(data):], trailer)
+	}
 
 	n, err := s.writeConnLocked(frame)
 	if n > headerOverHeadSize {
@@ -579,4 +766,92 @@ func (s *Session) fillWasteFrame(frame []byte, paddingLen int) {
 	binary.BigEndian.PutUint32(frame[1:5], 0)
 	binary.BigEndian.PutUint16(frame[5:7], uint16(paddingLen))
 	clear(frame[headerOverHeadSize:])
+}
+
+func deriveHMACKey(passwordHash, nonce []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte("mist-frame-mac-v3"))
+	h.Write(passwordHash)
+	h.Write(nonce)
+	return h.Sum(nil)
+}
+
+func isHandshakeFrame(cmd byte) bool {
+	switch cmd {
+	case cmdSettings, cmdServerSettings, cmdUpdatePaddingScheme, cmdAuthProof:
+		return true
+	}
+	return false
+}
+
+func (s *Session) computeFrameHMAC(cmd byte, sid uint32, payload []byte) []byte {
+	if len(s.hmacKey) == 0 {
+		return nil
+	}
+	mac := hmac.New(sha256.New, s.hmacKey)
+	mac.Write([]byte{cmd})
+	binary.BigEndian.PutUint32(s.hmacBuf[:], sid)
+	mac.Write(s.hmacBuf[:])
+	binary.BigEndian.PutUint16(s.hmacBuf[:2], uint16(len(payload)))
+	mac.Write(s.hmacBuf[:2])
+	mac.Write(payload)
+	return mac.Sum(nil)
+}
+
+func (s *Session) drainFramePayload(hdr rawHeader) error {
+	wireLen := int(hdr.Length())
+	if wireLen == 0 {
+		return nil
+	}
+	if s.hmacMode && !isHandshakeFrame(hdr.Cmd()) {
+		buffer := buf.Get(wireLen)
+		_, err := io.ReadFull(s.conn, buffer)
+		buf.Put(buffer)
+		if err != nil {
+			return err
+		}
+		payloadLen := wireLen - hmacTrailerLen
+		expectedMAC := s.computeFrameHMAC(hdr.Cmd(), hdr.StreamID(), buffer[:payloadLen])
+		if subtle.ConstantTimeCompare(expectedMAC, buffer[payloadLen:]) != 1 {
+			return errors.New("HMAC verification failed")
+		}
+		return nil
+	}
+	_, err := io.CopyN(io.Discard, s.conn, int64(wireLen))
+	return err
+}
+
+func (s *Session) readFramePayload(hdr rawHeader) ([]byte, error) {
+	wireLen := int(hdr.Length())
+	if wireLen == 0 {
+		return nil, nil
+	}
+
+	cmd := hdr.Cmd()
+	if s.hmacMode && !isHandshakeFrame(cmd) {
+		if wireLen < hmacTrailerLen {
+			return nil, errors.New("frame too short for HMAC")
+		}
+		buffer := buf.Get(wireLen)
+		if _, err := io.ReadFull(s.conn, buffer); err != nil {
+			buf.Put(buffer)
+			return nil, err
+		}
+		payloadLen := wireLen - hmacTrailerLen
+		payload := buffer[:payloadLen]
+		expectedMAC := s.computeFrameHMAC(cmd, hdr.StreamID(), payload)
+		actualMAC := buffer[payloadLen:]
+		if subtle.ConstantTimeCompare(expectedMAC, actualMAC) != 1 {
+			buf.Put(buffer)
+			return nil, errors.New("HMAC verification failed")
+		}
+		return payload, nil
+	}
+
+	buffer := buf.Get(wireLen)
+	if _, err := io.ReadFull(s.conn, buffer); err != nil {
+		buf.Put(buffer)
+		return nil, err
+	}
+	return buffer, nil
 }

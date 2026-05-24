@@ -33,6 +33,11 @@ func main() {
 	certFile := flag.String("cert-file", "", "custom certificate file path (required for custom type)")
 	keyFile := flag.String("key-file", "", "custom private key file path (required for custom type)")
 	fallback := flag.String("fallback", "", "fallback address for unauthorized traffic (e.g. 127.0.0.1:80)")
+	tlsMinVersionStr := flag.String("tls-min-version", "1.2", "minimum TLS version (1.2 or 1.3)")
+	maxStreams := flag.Int("max-streams", 256, "max concurrent streams per session (0 = unlimited)")
+	readTimeout := flag.Duration("read-timeout", 5*time.Minute, "read deadline for idle connections (0 = disabled)")
+	keepalive := flag.Duration("keepalive", 30*time.Second, "keepalive interval (0 = disabled)")
+	synRateLimit := flag.Int("syn-rate-limit", 0, "max SYN frames per second per session (0 = unlimited)")
 	flag.Parse()
 
 	if *password == "" {
@@ -64,6 +69,16 @@ func main() {
 	var sum = sha256.Sum256([]byte(*password))
 	passwordSha256 = sum[:]
 
+	var tlsMinVersion uint16 = tls.VersionTLS12
+	switch *tlsMinVersionStr {
+	case "1.3":
+		tlsMinVersion = tls.VersionTLS13
+	case "1.2":
+		tlsMinVersion = tls.VersionTLS12
+	default:
+		logrus.Fatalln("tls-min-version must be 1.2 or 1.3")
+	}
+
 	logrus.Infoln("[Server]", util.ProgramVersionName)
 	logrus.Infoln("[Server] Listening TCP", *listen)
 	if *fallback != "" {
@@ -75,13 +90,13 @@ func main() {
 		logrus.Fatalln("listen server tcp:", err)
 	}
 
-	tlsConfig, err := newServerTLSConfig(*certType, *certName, *listen, *acmeHTTP, *acmeCache, *acmeEmail, *certFile, *keyFile)
+	tlsConfig, err := newServerTLSConfig(*certType, *certName, *listen, *acmeHTTP, *acmeCache, *acmeEmail, *certFile, *keyFile, tlsMinVersion)
 	if err != nil {
 		logrus.Fatalln("error certificate options:", err)
 	}
 
 	ctx := context.Background()
-	server := NewMyServer(tlsConfig, *fallback)
+	server := NewMyServer(tlsConfig, *fallback, *maxStreams, *readTimeout, *keepalive, *synRateLimit, passwordSha256)
 
 	for {
 		c, err := listener.Accept()
@@ -92,24 +107,23 @@ func main() {
 	}
 }
 
-func newServerTLSConfig(certType, certName, listen, acmeHTTP, acmeCache, acmeEmail, certFile, keyFile string) (*tls.Config, error) {
+func newServerTLSConfig(certType, certName, listen, acmeHTTP, acmeCache, acmeEmail, certFile, keyFile string, tlsMinVersion uint16) (*tls.Config, error) {
 	certType = strings.ToLower(strings.TrimSpace(certType))
 	switch certType {
 	case "self-signed", "self":
-		return newSelfSignedTLSConfig(certName, listen, false)
+		return newSelfSignedTLSConfig(certName, listen, false, tlsMinVersion)
 	case "ip":
-		// Compatibility with older "ip" option which strictly requires an IP
-		return newSelfSignedTLSConfig(certName, listen, true)
+		return newSelfSignedTLSConfig(certName, listen, true, tlsMinVersion)
 	case "acme", "domain":
-		return newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail)
+		return newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail, tlsMinVersion)
 	case "custom":
-		return newCustomTLSConfig(certFile, keyFile)
+		return newCustomTLSConfig(certFile, keyFile, tlsMinVersion)
 	default:
 		return nil, fmt.Errorf("-cert-type must be self-signed, acme, or custom")
 	}
 }
 
-func newSelfSignedTLSConfig(certName, listen string, requireIP bool) (*tls.Config, error) {
+func newSelfSignedTLSConfig(certName, listen string, requireIP bool, tlsMinVersion uint16) (*tls.Config, error) {
 	generatedCertName, err := generatedSelfSignedCertificateName(certName, listen, requireIP)
 	if err != nil {
 		return nil, err
@@ -122,18 +136,29 @@ func newSelfSignedTLSConfig(certName, listen string, requireIP bool) (*tls.Confi
 		certSum := sha256.Sum256(tlsCert.Certificate[0])
 		logrus.Infof("[Server] TLS self-signed cert %s sha256 %x", generatedCertName, certSum)
 	}
-	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		CurvePreferences: []tls.CurveID{
-			tls.X25519,
-		},
-		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return tlsCert, nil
-		},
-	}, nil
+	config := baseTLSConfig(tlsMinVersion)
+	config.CurvePreferences = []tls.CurveID{tls.X25519}
+	config.GetCertificate = func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return tlsCert, nil
+	}
+	return config, nil
 }
 
-func newCustomTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+func baseTLSConfig(tlsMinVersion uint16) *tls.Config {
+	config := &tls.Config{
+		MinVersion: tlsMinVersion,
+	}
+	if tlsMinVersion == tls.VersionTLS12 {
+		config.CipherSuites = []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		}
+	}
+	return config
+}
+
+func newCustomTLSConfig(certFile, keyFile string, tlsMinVersion uint16) (*tls.Config, error) {
 	certFile = strings.TrimSpace(certFile)
 	keyFile = strings.TrimSpace(keyFile)
 	if certFile == "" || keyFile == "" {
@@ -147,18 +172,15 @@ func newCustomTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 		certSum := sha256.Sum256(tlsCert.Certificate[0])
 		logrus.Infof("[Server] TLS custom cert sha256 %x", certSum)
 	}
-	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		CurvePreferences: []tls.CurveID{
-			tls.X25519,
-		},
-		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return &tlsCert, nil
-		},
-	}, nil
+	config := baseTLSConfig(tlsMinVersion)
+	config.CurvePreferences = []tls.CurveID{tls.X25519}
+	config.GetCertificate = func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &tlsCert, nil
+	}
+	return config, nil
 }
 
-func newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail string) (*tls.Config, error) {
+func newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail string, tlsMinVersion uint16) (*tls.Config, error) {
 	domain, err := acmeDomainName(certName)
 	if err != nil {
 		return nil, err
@@ -190,8 +212,15 @@ func newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail string) (*tls.Con
 
 	logrus.Infof("[Server] TLS ACME domain cert %s cache %s http-01 %s", domain, acmeCache, acmeHTTP)
 	tlsConfig := manager.TLSConfig()
-	tlsConfig.MinVersion = tls.VersionTLS12
+	tlsConfig.MinVersion = tlsMinVersion
 	tlsConfig.CurvePreferences = []tls.CurveID{tls.X25519}
+	if tlsMinVersion == tls.VersionTLS12 {
+		tlsConfig.CipherSuites = []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		}
+	}
 	return tlsConfig, nil
 }
 

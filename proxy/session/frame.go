@@ -17,6 +17,8 @@ const ( // cmds
 	cmdHeartRequest   = 8  // Keep alive command
 	cmdHeartResponse  = 9  // Keep alive command
 	cmdServerSettings = 10 // Settings (Server send to client)
+	// Since version 3
+	cmdAuthProof = 11 // Client sends auth proof (v3 challenge-response)
 )
 
 const (

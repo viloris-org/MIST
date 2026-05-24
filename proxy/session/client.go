@@ -44,10 +44,17 @@ type Client struct {
 
 	idleSessionTimeout time.Duration
 	minIdleSession     int
+
+	maxStreams        int
+	readTimeout       time.Duration
+	keepaliveInterval time.Duration
+	synRateLimit      int
+	passwordHash      []byte
 }
 
 func NewClient(ctx context.Context, dialOut util.DialOutFunc,
 	_padding *atomic.TypedValue[*padding.PaddingFactory], idleSessionCheckInterval, idleSessionTimeout time.Duration, minIdleSession int,
+	maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte,
 ) *Client {
 	c := &Client{
 		sessions:           make(map[uint64]*Session),
@@ -55,6 +62,11 @@ func NewClient(ctx context.Context, dialOut util.DialOutFunc,
 		padding:            _padding,
 		idleSessionTimeout: idleSessionTimeout,
 		minIdleSession:     minIdleSession,
+		maxStreams:         maxStreams,
+		readTimeout:        readTimeout,
+		keepaliveInterval:  keepaliveInterval,
+		synRateLimit:       synRateLimit,
+		passwordHash:       passwordHash,
 	}
 	if idleSessionCheckInterval <= time.Second*5 {
 		idleSessionCheckInterval = time.Second * 30
@@ -145,7 +157,7 @@ func (c *Client) createSession(ctx context.Context) (*Session, error) {
 		return nil, err
 	}
 
-	session := NewClientSession(underlying, &padding.DefaultPaddingFactory)
+	session := NewClientSession(underlying, &padding.DefaultPaddingFactory, c.maxStreams, c.readTimeout, c.keepaliveInterval, c.synRateLimit, c.passwordHash)
 	session.seq = c.sessionCounter.Add(1)
 	session.dieHook = func() {
 		if clientDebugSessionPool {

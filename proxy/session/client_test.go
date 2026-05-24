@@ -26,12 +26,13 @@ func TestIdleCleanupKeepsSessionBeforeIdleUntil(t *testing.T) {
 		idleSessionTimeout: 30 * time.Second,
 	}
 	s := &Session{
-		conn:      &recordingConn{},
-		die:       make(chan struct{}),
-		streams:   make(map[uint32]*Stream),
-		seq:       1,
-		idleSince: now.Add(-time.Minute),
-		idleUntil: now.Add(time.Second),
+		conn:              &recordingConn{},
+		die:               make(chan struct{}),
+		streams:           make(map[uint32]*Stream),
+		seq:               1,
+		idleSince:         now.Add(-time.Minute),
+		idleUntil:         now.Add(time.Second),
+		settingsReceived:  make(chan struct{}),
 	}
 	c.idleSession.Insert(math.MaxUint64-s.seq, s)
 
