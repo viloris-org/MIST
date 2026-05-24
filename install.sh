@@ -119,7 +119,7 @@ msg() {
                 cert_mode) echo "Cert Mode" ;;
                 extract_fingerprint) echo "Extracting certificate SHA-256 fingerprint..." ;;
                 cert_fingerprint) echo "Cert Fingerprint" ;;
-                client_cmd) echo "👉 Client connection command" ;;
+                client_cmd) echo "Client connection command" ;;
                 fingerprint_hint) echo "Could not catch SHA-256 fingerprint in logs yet. It might still be starting. Run this to check" ;;
                 extract_custom) echo "Extracting SHA-256 fingerprint from custom certificate..." ;;
                 client_conn_type) echo "Client connection details" ;;
@@ -317,9 +317,14 @@ EOF
 
     if [ "$CERT_TYPE" = "self-signed" ]; then
         echo -e "  $(msg extract_fingerprint)"
-        sleep 2
-        # 从 journalctl 抓取生成的证书 sha256 指纹
-        SHA256=$(journalctl -u mist-server -n 50 --no-pager | grep -oE "sha256 [0-9a-fA-F]{64}" | awk '{print $2}')
+        SHA256=""
+        for i in $(seq 1 10); do
+            SHA256=$(journalctl -u mist-server -n 50 --no-pager | grep -oE "sha256 [0-9a-fA-F]{64}" | awk '{print $2}')
+            if [ -n "$SHA256" ]; then
+                break
+            fi
+            sleep 1
+        done
         if [ -n "$SHA256" ]; then
             echo -e "  $(msg cert_fingerprint):   ${GREEN}$SHA256${NC}"
             echo -e "\n  👉 ${PURPLE}$(msg client_cmd):${NC}"
@@ -333,8 +338,14 @@ EOF
         echo -e "  ./mist-client -l 127.0.0.1:1080 -s $CERT_NAME:$PORT -p $PASSWORD"
     else
         echo -e "  $(msg extract_custom)"
-        sleep 2
-        SHA256=$(journalctl -u mist-server -n 50 --no-pager | grep -oE "sha256 [0-9a-fA-F]{64}" | awk '{print $2}')
+        SHA256=""
+        for i in $(seq 1 10); do
+            SHA256=$(journalctl -u mist-server -n 50 --no-pager | grep -oE "sha256 [0-9a-fA-F]{64}" | awk '{print $2}')
+            if [ -n "$SHA256" ]; then
+                break
+            fi
+            sleep 1
+        done
         if [ -n "$SHA256" ]; then
             echo -e "  $(msg cert_fingerprint):   ${GREEN}$SHA256${NC}"
         fi
@@ -345,19 +356,26 @@ EOF
 else
     # 仅生成前台启动脚本
     echo -e "$(msg gen_start_sh)"
+    # 动态拼接命令行参数，匹配 systemd 路径的条件逻辑
+    CMD="./mist-server -l \"0.0.0.0:$PORT\" -p \"$PASSWORD\" -cert-type \"$CERT_TYPE\""
+    if [ "$CERT_TYPE" = "self-signed" ]; then
+        if [ -n "$CERT_NAME" ]; then
+            CMD="$CMD -cert-name \"$CERT_NAME\""
+        fi
+    elif [ "$CERT_TYPE" = "acme" ]; then
+        CMD="$CMD -cert-name \"$CERT_NAME\" -acme-http \"$ACME_HTTP\" -acme-cache \"$ACME_CACHE\""
+        if [ -n "$ACME_EMAIL" ]; then
+            CMD="$CMD -acme-email \"$ACME_EMAIL\""
+        fi
+    elif [ "$CERT_TYPE" = "custom" ]; then
+        CMD="$CMD -cert-file \"$CERT_FILE\" -key-file \"$KEY_FILE\""
+    fi
+    if [ -n "$FALLBACK" ]; then
+        CMD="$CMD -fallback \"$FALLBACK\""
+    fi
     cat > "./start.sh" <<EOF
 #!/usr/bin/env bash
-./mist-server \
-    -l "0.0.0.0:$PORT" \
-    -p "$PASSWORD" \
-    -cert-type "$CERT_TYPE" \
-    -cert-name "$CERT_NAME" \
-    -acme-http "$ACME_HTTP" \
-    -acme-cache "$ACME_CACHE" \
-    -acme-email "$ACME_EMAIL" \
-    -cert-file "$CERT_FILE" \
-    -key-file "$KEY_FILE" \
-    -fallback "$FALLBACK"
+$CMD
 EOF
     chmod +x ./start.sh
 

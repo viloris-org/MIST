@@ -58,7 +58,7 @@ defer client.Close()
 conn, _ := client.DialStream(ctx, destination)
 ```
 
-`Logger` 接口允许各平台注入自己的日志实现——Android 使用 `android.util.Log`，iOS 使用 `os_log`，CLI 使用 `logrus`。完整配置参见 `mistclient/options.go`。
+`Logger` 接口允许各平台注入自己的日志实现——Android 使用 `android.util.Log`，iOS 使用 `os_log`，CLI 使用 `logrus`。完整配置参见 `../../mistclient/options.go`。
 
 ## 服务端手动使用
 

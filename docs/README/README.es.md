@@ -58,7 +58,7 @@ defer client.Close()
 conn, _ := client.DialStream(ctx, destination)
 ```
 
-La interfaz `Logger` permite que cada plataforma inyecte su propio registro — `android.util.Log` en Android, `os_log` en iOS, `logrus` en CLI. Consulte `mistclient/options.go` para la configuración completa.
+La interfaz `Logger` permite que cada plataforma inyecte su propio registro — `android.util.Log` en Android, `os_log` en iOS, `logrus` en CLI. Consulte `../../mistclient/options.go` para la configuración completa.
 
 ## Uso Manual del Servidor
 
@@ -146,7 +146,7 @@ El cliente también acepta URLs `mist://`:
 
 ## Cumplimiento y Legal
 
-MIST es una herramienta de transporte de red de propósito general. No recolecta telemetría, no se comunica con servidores externos ni incluye ningún mecanismo de puerta trasera o evasión. Como cualquier software de red, puede utilizarse tanto para fines legítimos como ilegítimos. Los autores y colaboradores proporcionan este software "tal cual" para uso exclusivamente autorizado.
+MIST es una herramienta de transporte de red de propósito general. No recolecta telemetría, no realiza llamadas a servidores del proyecto ni incluye ningún mecanismo de puerta trasera o evasión. Como cualquier software de red, puede utilizarse tanto para fines legítimos como ilegítimos. Los autores y colaboradores proporcionan este software "tal cual" para uso exclusivamente autorizado.
 
 ### Uso Autorizado
 
