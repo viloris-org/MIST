@@ -48,10 +48,11 @@ fi
 chmod +x "/tmp/${BIN_NAME}"
 
 if [ "$(id -u)" -eq 0 ]; then
-	mv "/tmp/${BIN_NAME}" "${INSTALL_PATH}"
+	install -m 0755 "/tmp/${BIN_NAME}" "${INSTALL_PATH}"
 else
-	sudo mv "/tmp/${BIN_NAME}" "${INSTALL_PATH}"
+	sudo install -m 0755 "/tmp/${BIN_NAME}" "${INSTALL_PATH}"
 fi
+rm -f "/tmp/${BIN_NAME}"
 
 msg "Installed to ${INSTALL_PATH}"
 

@@ -319,8 +319,7 @@ if [[ "$IS_SYSTEMD_CONFIRM" =~ ^[Yy]$ ]]; then
     mkdir -p "$CONF_DIR"
     
     # 拷贝二进制
-    cp ./mist-server /usr/local/bin/mist-server
-    chmod +x /usr/local/bin/mist-server
+    install -m 0755 ./mist-server /usr/local/bin/mist-server
 
     # 生成环境配置文件
     cat > "$CONF_DIR/server.conf" <<EOF
