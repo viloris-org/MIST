@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ====================================================================
-#  MIST-Server 一键交互式安装与自启动配置脚本 (Multilingual)
+#  MIST (薄雾) Server 一键交互式安装与自启动配置脚本 (Multilingual)
 # ====================================================================
 
 # 终端颜色定义
@@ -73,7 +73,7 @@ msg() {
                 client_conn_custom_hint) echo "根据您的自定义证书域，使用 IP + SNI，或直接使用解析到该 IP 的域名连入。" ;;
                 gen_start_sh) echo "正在为您生成本地前台启动脚本 start.sh..." ;;
                 start_sh_success) echo "启动脚本已生成！您可以执行 ./start.sh 运行服务器。" ;;
-                assistant_title) echo "MIST Server 一键配置与安装助手" ;;
+                assistant_title) echo "MIST (薄雾) Server 一键配置与安装助手" ;;
             esac
             ;;
         *)
