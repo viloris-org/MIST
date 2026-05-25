@@ -30,6 +30,10 @@ type Client struct {
 	dieCancel     context.CancelFunc
 }
 
+type Stats struct {
+	SessionPool session.ClientStats `json:"session_pool"`
+}
+
 // NewClient creates a new MIST client. It validates the options, fills
 // defaults, builds a TLS config, and starts the session pool.
 func NewClient(opts Options) (*Client, error) {
@@ -88,6 +92,10 @@ func (c *Client) DialStream(ctx context.Context, dest M.Socksaddr) (net.Conn, er
 func (c *Client) Close() error {
 	c.dieCancel()
 	return c.sessionClient.Close()
+}
+
+func (c *Client) Stats() Stats {
+	return Stats{SessionPool: c.sessionClient.Stats()}
 }
 
 func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {

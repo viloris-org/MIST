@@ -1,45 +1,84 @@
-# This is an example .goreleaser.yml file with some sensible defaults.
-# Make sure to check the documentation at https://goreleaser.com
-project_name: anytls
+project_name: mist
+
 builds:
-  - id: anytls-client
-    binary: anytls-client
-    dir: cmd/client
+  - id: mist-client
+    main: ./cmd/mist-client
+    binary: "mist-client-linux-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     env:
       - CGO_ENABLED=0
     goos:
       - linux
-      - windows
-      - darwin
     goarch:
       - amd64
       - arm64
+      - arm
+      - mips
+      - mipsle
+      - riscv64
+    goarm:
+      - "7"
+    gomips:
+      - softfloat
+    ignore:
+      - goarch: amd64
+        goarm: "7"
+      - goarch: arm64
+        goarm: "7"
+      - goarch: mips
+        goarm: "7"
+      - goarch: mipsle
+        goarm: "7"
+      - goarch: riscv64
+        goarm: "7"
     flags:
       - -trimpath
       - -buildvcs=false
     ldflags:
-      - -s -w
-  - id: anytls-server
-    binary: anytls-server
-    dir: cmd/server
+      - -s -w -X mist/util.Version={{ .Version }} -X mist/util.Commit={{ .Commit }} -X mist/util.Date={{ .Date }}
+
+  - id: mist-server
+    main: ./cmd/mist-server
+    binary: "mist-server-linux-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
     env:
       - CGO_ENABLED=0
     goos:
       - linux
-      - windows
-      - darwin
     goarch:
       - amd64
       - arm64
+      - arm
+      - mips
+      - mipsle
+      - riscv64
+    goarm:
+      - "7"
+    gomips:
+      - softfloat
+    ignore:
+      - goarch: amd64
+        goarm: "7"
+      - goarch: arm64
+        goarm: "7"
+      - goarch: mips
+        goarm: "7"
+      - goarch: mipsle
+        goarm: "7"
+      - goarch: riscv64
+        goarm: "7"
     flags:
       - -trimpath
       - -buildvcs=false
     ldflags:
-      - -s -w
+      - -s -w -X mist/util.Version={{ .Version }} -X mist/util.Commit={{ .Commit }} -X mist/util.Date={{ .Date }}
+
 archives:
-  - id: anytls
+  - id: mist-client
     builds:
-      - anytls-client
-      - anytls-server
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: zip
+      - mist-client
+    name_template: "{{ .Binary }}"
+    format: binary
+  - id: mist-server
+    builds:
+      - mist-server
+    name_template: "{{ .Binary }}"
+    format: binary

@@ -1,13 +1,13 @@
 package main
 
 import (
-	"mist/proxy"
-	"mist/proxy/padding"
-	"mist/proxy/session"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/binary"
+	"mist/proxy"
+	"mist/proxy/padding"
+	"mist/proxy/session"
 	"net"
 	"runtime/debug"
 	"strings"

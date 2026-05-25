@@ -1,14 +1,14 @@
 package main
 
 import (
-	"mist/proxy/padding"
-	"mist/util"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
+	"mist/proxy/padding"
+	"mist/util"
 	"net"
 	"net/http"
 	"os"

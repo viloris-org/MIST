@@ -1,8 +1,6 @@
 package session
 
 import (
-	"mist/proxy/padding"
-	"mist/util"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -10,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"mist/proxy/padding"
+	"mist/util"
 	"net"
 	"os"
 	"runtime/debug"
@@ -50,6 +50,14 @@ type Client struct {
 	keepaliveInterval time.Duration
 	synRateLimit      int
 	passwordHash      []byte
+}
+
+type ClientStats struct {
+	Sessions           int    `json:"sessions"`
+	IdleSessions       int    `json:"idle_sessions"`
+	OpenStreams        int    `json:"open_streams"`
+	CumulativeSessions uint64 `json:"cumulative_sessions"`
+	CumulativeStreams  uint64 `json:"cumulative_streams"`
 }
 
 func NewClient(ctx context.Context, dialOut util.DialOutFunc,
@@ -111,10 +119,10 @@ func (c *Client) CreateStream(ctx context.Context) (net.Conn, error) {
 		return nil, fmt.Errorf("failed to create stream: %w", err)
 	}
 
+	streamCount := clientStreamCounter.Add(1)
 	if clientDebugSessionPool {
-		cn := clientStreamCounter.Add(1)
 		s := c.sessionCounter.Load()
-		logrus.Infoln("cumulative session:", s, "cumulative stream:", cn, "avg:", float64(cn)/float64(s))
+		logrus.Infoln("cumulative session:", s, "cumulative stream:", streamCount, "avg:", float64(streamCount)/float64(s))
 	}
 
 	stream.dieHook = func() {
@@ -197,6 +205,33 @@ func (c *Client) Close() error {
 	}
 
 	return nil
+}
+
+func (c *Client) Stats() ClientStats {
+	stats := ClientStats{
+		CumulativeSessions: c.sessionCounter.Load(),
+		CumulativeStreams:  clientStreamCounter.Load(),
+	}
+
+	c.sessionsLock.Lock()
+	stats.Sessions = len(c.sessions)
+	sessions := make([]*Session, 0, len(c.sessions))
+	for _, session := range c.sessions {
+		sessions = append(sessions, session)
+	}
+	c.sessionsLock.Unlock()
+
+	c.idleSessionLock.Lock()
+	stats.IdleSessions = len(c.idleSession.items)
+	c.idleSessionLock.Unlock()
+
+	for _, session := range sessions {
+		session.streamLock.RLock()
+		stats.OpenStreams += len(session.streams)
+		session.streamLock.RUnlock()
+	}
+
+	return stats
 }
 
 func (c *Client) startIdleCleanup(interval time.Duration) {

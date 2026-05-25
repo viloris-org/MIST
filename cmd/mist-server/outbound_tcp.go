@@ -1,8 +1,8 @@
 package main
 
 import (
-	"mist/proxy"
 	"context"
+	"mist/proxy"
 	"net"
 
 	"MistCore/common/bufio"
