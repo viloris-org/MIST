@@ -164,14 +164,22 @@ info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 ok()   { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
 # Ensure we can read user input even when piped
-if [ -t 0 ]; then INPUT_TTY="/dev/stdin"
-elif [ -r /dev/tty ]; then INPUT_TTY="/dev/tty"
-else die "This installer requires an interactive terminal."
+if [ ! -r /dev/tty ]; then
+	die "This installer requires an interactive terminal."
 fi
 
 ask() {
 	local prompt="$1" var_name="$2"
-	read -r -p "$prompt" "$var_name" < "$INPUT_TTY"
+	read -r -p "$prompt" "$var_name" < /dev/tty || true
+}
+
+random_alnum() {
+	local length="$1"
+	local value=""
+	while [ "${#value}" -lt "$length" ]; do
+		value="${value}$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+	done
+	printf '%s' "${value:0:length}"
 }
 
 detect_platform() {
@@ -316,7 +324,7 @@ while true; do
 done
 
 # password
-default_pw=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
+default_pw=$(random_alnum 16)
 ask "$(msg prompt_pw) [$(msg default_random): $default_pw]: " input_pw
 PASSWORD=${input_pw:-$default_pw}
 
@@ -388,7 +396,7 @@ if [[ "${web_choice:-n}" =~ ^[Yy]$ ]]; then
 	WEB_LISTEN=${input_web_listen:-$WEB_LISTEN}
 
 	# Generate a random password for dashboard
-	default_web_pw=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
+	default_web_pw=$(random_alnum 16)
 	ask "$(msg prompt_web_pw) [$(msg default_random): $default_web_pw]: " input_web_pw
 	WEB_PASSWORD=${input_web_pw:-$default_web_pw}
 
