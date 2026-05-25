@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -43,14 +44,15 @@ type Dashboard struct {
 	tokenDur     time.Duration
 	tlsCertFile  string
 	tlsKeyFile   string
+	tlsConfig    *tls.Config
 
-	hub        *WSHub
-	logBuffer  *LogBuffer
-	logHook    *LogrusHook
-	stopTicker   chan struct{}
-	stopCleanup  chan struct{}
-	stopOnce     sync.Once
-	cleanupOnce  sync.Once
+	hub         *WSHub
+	logBuffer   *LogBuffer
+	logHook     *LogrusHook
+	stopTicker  chan struct{}
+	stopCleanup chan struct{}
+	stopOnce    sync.Once
+	cleanupOnce sync.Once
 }
 
 // New creates a new dashboard server.
@@ -115,6 +117,15 @@ func WithTLS(certFile, keyFile string) Option {
 	}
 }
 
+// WithTLSConfig sets a TLS config for the dashboard listener.
+func WithTLSConfig(config *tls.Config) Option {
+	return func(d *Dashboard) {
+		if config != nil {
+			d.tlsConfig = config.Clone()
+		}
+	}
+}
+
 // Start begins serving the dashboard.
 func (d *Dashboard) Start() error {
 	mux := http.NewServeMux()
@@ -144,18 +155,21 @@ func (d *Dashboard) Start() error {
 	go d.statusTicker()
 
 	d.server = &http.Server{
-		Addr:    d.addr,
-		Handler: mux,
+		Addr:      d.addr,
+		Handler:   mux,
+		TLSConfig: d.tlsConfig,
 	}
 
 	go func() {
 		proto := "http"
-		if d.tlsCertFile != "" && d.tlsKeyFile != "" {
+		if d.tlsConfig != nil || (d.tlsCertFile != "" && d.tlsKeyFile != "") {
 			proto = "https"
 		}
 		logrus.Infof("Dashboard listening on %s://%s", proto, d.addr)
 		var serveErr error
-		if d.tlsCertFile != "" && d.tlsKeyFile != "" {
+		if d.tlsConfig != nil {
+			serveErr = d.server.ListenAndServeTLS("", "")
+		} else if d.tlsCertFile != "" && d.tlsKeyFile != "" {
 			serveErr = d.server.ListenAndServeTLS(d.tlsCertFile, d.tlsKeyFile)
 		} else {
 			serveErr = d.server.ListenAndServe()

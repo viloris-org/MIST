@@ -42,6 +42,7 @@ func main() {
 	webEnabled := flag.Bool("web", false, "enable web dashboard")
 	webListen := flag.String("web-listen", "127.0.0.1:9090", "web dashboard listen address")
 	webPassword := flag.String("web-password", "", "dashboard login password")
+	webTLS := flag.Bool("web-tls", false, "enable dashboard TLS using the main server certificate")
 	webTLSCert := flag.String("web-tls-cert", "", "dashboard TLS certificate file")
 	webTLSKey := flag.String("web-tls-key", "", "dashboard TLS key file")
 	flag.Parse()
@@ -113,6 +114,8 @@ func main() {
 		}
 		if *webTLSCert != "" && *webTLSKey != "" {
 			opts = append(opts, web.WithTLS(*webTLSCert, *webTLSKey))
+		} else if *webTLS {
+			opts = append(opts, web.WithTLSConfig(tlsConfig))
 		}
 		dash := web.New(*webListen, server, opts...)
 		if err := dash.Start(); err != nil {

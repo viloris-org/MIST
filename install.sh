@@ -18,6 +18,14 @@ if [[ "$LANG" =~ ^zh ]]; then
 	T[compile_success]="编译成功！"
 	T[compile_fail]="编译失败，请确保 Go 环境及依赖完整。"
 	T[go_env_fail]="未检测到 Go 环境且当前目录下没有 mist-server 二进制。请先编译或安装 Go。"
+	T[existing_install]="检测到已有 MIST Server 安装。"
+	T[current_config]="当前配置文件"
+	T[prompt_existing_action]="请选择操作"
+	T[action_update]="更新程序并保留现有配置 (默认)"
+	T[action_reconfigure]="重新交互配置并覆盖现有配置"
+	T[update_preserve]="正在更新程序并保留现有配置..."
+	T[update_success]="MIST Server 已更新，并保留现有配置。"
+	T[backup_config]="已备份原配置"
 	T[config_collect]="交互式配置参数进行中..."
 	T[prompt_port]="请输入服务监听端口"
 	T[prompt_pw]="请输入连接密码"
@@ -43,6 +51,7 @@ if [[ "$LANG" =~ ^zh ]]; then
 	T[prompt_web_listen]="请输入管理面板监听地址"
 	T[prompt_web_pw]="请输入管理面板登录密码 (留空则不启用密码认证)"
 	T[prompt_web_tls]="是否为管理面板启用 TLS/HTTPS? (y/n)"
+	T[prompt_web_tls_reuse]="是否复用主服务 TLS 证书? (y/n)"
 	T[prompt_web_tls_cert]="请输入管理面板 TLS 证书文件路径"
 	T[prompt_web_tls_key]="请输入管理面板 TLS 私钥文件路径"
 	T[summary_web]="管理面板"
@@ -88,6 +97,14 @@ else
 	T[compile_success]="Compilation succeeded!"
 	T[compile_fail]="Compilation failed. Please ensure the Go environment and dependencies are complete."
 	T[go_env_fail]="Go environment not found and mist-server binary not found. Please install Go or build first."
+	T[existing_install]="Existing MIST Server installation detected."
+	T[current_config]="Current config file"
+	T[prompt_existing_action]="Please select an action"
+	T[action_update]="Update binary and keep existing config (Default)"
+	T[action_reconfigure]="Reconfigure interactively and overwrite existing config"
+	T[update_preserve]="Updating binary while preserving existing config..."
+	T[update_success]="MIST Server updated with existing config preserved."
+	T[backup_config]="Backed up previous config"
 	T[config_collect]="Interactive parameter configuration in progress..."
 	T[prompt_port]="Please enter the service listening port"
 	T[prompt_pw]="Please enter the connection password"
@@ -113,6 +130,7 @@ else
 	T[prompt_web_listen]="Please enter the dashboard listen address"
 	T[prompt_web_pw]="Please enter the dashboard login password (leave empty to disable authentication)"
 	T[prompt_web_tls]="Enable TLS/HTTPS for the dashboard? (y/n)"
+	T[prompt_web_tls_reuse]="Reuse the main server TLS certificate? (y/n)"
 	T[prompt_web_tls_cert]="Please enter the dashboard TLS certificate file path"
 	T[prompt_web_tls_key]="Please enter the dashboard TLS private key file path"
 	T[summary_web]="Dashboard"
@@ -158,18 +176,32 @@ BLUE='\033[0;34m'; PURPLE='\033[0;35m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 DOWNLOAD_BASE="${DOWNLOAD_BASE:-https://github.com/viloris-org/MIST/releases/latest/download}"
 BIN_NAME="mist-server"
+CONF_DIR="${CONF_DIR:-/etc/mist}"
+CONF_FILE="$CONF_DIR/server.conf"
+SERVICE_FILE="/etc/systemd/system/mist-server.service"
+INSTALL_PATH="/usr/local/bin/mist-server"
+REQUESTED_ACTION="${1:-}"
+case "$REQUESTED_ACTION" in
+	--update|update) REQUESTED_ACTION="update" ;;
+	--reconfigure|reconfigure) REQUESTED_ACTION="reconfigure" ;;
+	"") ;;
+	*) echo "Usage: $0 [--update|--reconfigure]" >&2; exit 1 ;;
+esac
 
 die()  { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 ok()   { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
 # Ensure we can read user input even when piped
-if [ ! -r /dev/tty ]; then
+if [ "$REQUESTED_ACTION" != "update" ] && [ ! -r /dev/tty ]; then
 	die "This installer requires an interactive terminal."
 fi
 
 ask() {
 	local prompt="$1" var_name="$2"
+	if [ ! -r /dev/tty ]; then
+		die "This installer requires an interactive terminal."
+	fi
 	read -r -p "$prompt" "$var_name" < /dev/tty || true
 }
 
@@ -202,6 +234,63 @@ download() {
 	fi
 }
 
+backup_existing_config() {
+	if [ -f "$CONF_FILE" ]; then
+		local backup="$CONF_FILE.$(date +%Y%m%d%H%M%S).bak"
+		cp -a "$CONF_FILE" "$backup"
+		info "$(msg backup_config): $backup"
+	fi
+}
+
+install_server_binary() {
+	install -m 0755 ./mist-server "$INSTALL_PATH"
+}
+
+write_server_conf() {
+	local args="$1"
+	mkdir -p "$CONF_DIR"
+	cat > "$CONF_FILE" <<EOF
+ARGS="$args"
+EOF
+}
+
+write_systemd_service() {
+	cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=MIST Server Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$CONF_DIR
+EnvironmentFile=$CONF_FILE
+ExecStart=$INSTALL_PATH \$ARGS
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+restart_systemd_service() {
+	systemctl daemon-reload
+	systemctl enable mist-server
+	systemctl restart mist-server
+}
+
+update_existing_install() {
+	info "$(msg update_preserve)"
+	if [ ! -f "$CONF_FILE" ]; then
+		die "Existing systemd service found but $CONF_FILE is missing. Please reconfigure instead."
+	fi
+	install_server_binary
+	write_systemd_service
+	restart_systemd_service
+	ok "$(msg update_success)"
+}
+
 # Build server argument string from collected config
 build_args() {
 	local args="-l 0.0.0.0:$PORT -p $PASSWORD -cert-type $CERT_TYPE"
@@ -219,7 +308,11 @@ build_args() {
 	if [ "$WEB_ENABLED" = "true" ]; then
 		args="$args -web -web-listen $WEB_LISTEN"
 		[ -n "$WEB_PASSWORD" ] && args="$args -web-password $WEB_PASSWORD"
-		[ -n "$WEB_TLS_CERT" ] && args="$args -web-tls-cert $WEB_TLS_CERT -web-tls-key $WEB_TLS_KEY"
+		if [ "$WEB_TLS_ENABLED" = "true" ]; then
+			args="$args -web-tls"
+		elif [ -n "$WEB_TLS_CERT" ]; then
+			args="$args -web-tls-cert $WEB_TLS_CERT -web-tls-key $WEB_TLS_KEY"
+		fi
 	fi
 	echo "$args"
 }
@@ -310,6 +403,35 @@ else
 	fi
 fi
 
+RECONFIGURE_EXISTING="false"
+if [ "$REQUESTED_ACTION" = "update" ]; then
+	update_existing_install
+	exit 0
+elif [ "$REQUESTED_ACTION" = "reconfigure" ]; then
+	if [ -f "$CONF_FILE" ] || [ -f "$SERVICE_FILE" ]; then
+		RECONFIGURE_EXISTING="true"
+	fi
+elif [ -f "$CONF_FILE" ] || [ -f "$SERVICE_FILE" ]; then
+	echo -e "\n${YELLOW}[INFO]${NC} $(msg existing_install)"
+	[ -f "$CONF_FILE" ] && echo -e "  $(msg current_config): ${CYAN}$CONF_FILE${NC}"
+	if [ -f "$CONF_FILE" ]; then
+		echo -e "  ${CYAN}[1]${NC} $(msg action_update)"
+		echo -e "  ${CYAN}[2]${NC} $(msg action_reconfigure)"
+		ask "$(msg prompt_existing_action) [1-2, $(msg default) 1]: " existing_action
+		case "${existing_action:-1}" in
+			2)
+				RECONFIGURE_EXISTING="true"
+				;;
+			*)
+				update_existing_install
+				exit 0
+				;;
+		esac
+	else
+		RECONFIGURE_EXISTING="true"
+	fi
+fi
+
 # --- 3. interactive config -------------------------------------------------
 echo -e "\n${BLUE}[2/5]${NC} $(msg config_collect)"
 
@@ -385,6 +507,7 @@ echo -e "\n${PURPLE}━━━ $(msg web_title) ━━━${NC}"
 WEB_ENABLED="false"
 WEB_LISTEN="127.0.0.1:9090"
 WEB_PASSWORD=""
+WEB_TLS_ENABLED="false"
 WEB_TLS_CERT=""
 WEB_TLS_KEY=""
 
@@ -402,16 +525,21 @@ if [[ "${web_choice:-n}" =~ ^[Yy]$ ]]; then
 
 	ask "$(msg prompt_web_tls) [$(msg default): n]: " web_tls_choice
 	if [[ "${web_tls_choice:-n}" =~ ^[Yy]$ ]]; then
-		while true; do
-			ask "$(msg prompt_web_tls_cert): " WEB_TLS_CERT
-			[ -f "$WEB_TLS_CERT" ] && break
-			echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
-		done
-		while true; do
-			ask "$(msg prompt_web_tls_key): " WEB_TLS_KEY
-			[ -f "$WEB_TLS_KEY" ] && break
-			echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
-		done
+		ask "$(msg prompt_web_tls_reuse) [$(msg default): y]: " web_tls_reuse
+		if [[ "${web_tls_reuse:-y}" =~ ^[Yy]$ ]]; then
+			WEB_TLS_ENABLED="true"
+		else
+			while true; do
+				ask "$(msg prompt_web_tls_cert): " WEB_TLS_CERT
+				[ -f "$WEB_TLS_CERT" ] && break
+				echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
+			done
+			while true; do
+				ask "$(msg prompt_web_tls_key): " WEB_TLS_KEY
+				[ -f "$WEB_TLS_KEY" ] && break
+				echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
+			done
+		fi
 	fi
 fi
 
@@ -424,8 +552,13 @@ echo -e "  $(msg summary_cert):     ${GREEN}$CERT_TYPE${NC}"
 [ "${FALLBACK:-}" ]  && echo -e "  $(msg summary_fallback):  ${CYAN}$FALLBACK${NC}" || echo -e "  $(msg summary_fallback):  ${YELLOW}(none — HTTP 400)${NC}"
 if [ "$WEB_ENABLED" = "true" ]; then
 	echo -e "  $(msg summary_web):     ${GREEN}$(msg summary_web_enabled)${NC}"
-	echo -e "  $(msg web_url):     ${CYAN}http://$WEB_LISTEN${NC}"
+	if [ "$WEB_TLS_ENABLED" = "true" ] || [ -n "$WEB_TLS_CERT" ]; then
+		echo -e "  $(msg web_url):     ${CYAN}https://$WEB_LISTEN${NC}"
+	else
+		echo -e "  $(msg web_url):     ${CYAN}http://$WEB_LISTEN${NC}"
+	fi
 	echo -e "  $(msg web_pw):     ${YELLOW}$WEB_PASSWORD${NC}"
+	[ "$WEB_TLS_ENABLED" = "true" ] && echo -e "  Dashboard TLS:   ${GREEN}Enabled (reusing server certificate)${NC}"
 	[ -n "$WEB_TLS_CERT" ] && echo -e "  Dashboard TLS:   ${GREEN}Enabled${NC}"
 else
 	echo -e "  $(msg summary_web):     ${YELLOW}$(msg summary_web_disabled)${NC}"
@@ -447,35 +580,14 @@ ARGS=$(build_args)
 if [[ "${is_systemd:-y}" =~ ^[Yy]$ ]]; then
 	info "$(msg installing_systemd)"
 
-	CONF_DIR="/etc/mist"
+	if [ "$RECONFIGURE_EXISTING" = "true" ]; then
+		backup_existing_config
+	fi
 	mkdir -p "$CONF_DIR"
-	install -m 0755 ./mist-server /usr/local/bin/mist-server
-
-	cat > "$CONF_DIR/server.conf" <<EOF
-ARGS="$ARGS"
-EOF
-
-	cat > /etc/systemd/system/mist-server.service <<EOF
-[Unit]
-Description=MIST Server Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$CONF_DIR
-EnvironmentFile=$CONF_DIR/server.conf
-ExecStart=/usr/local/bin/mist-server \$ARGS
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-	systemctl daemon-reload
-	systemctl enable mist-server
-	systemctl restart mist-server
+	install_server_binary
+	write_server_conf "$ARGS"
+	write_systemd_service
+	restart_systemd_service
 
 	ok "$(msg systemd_success)"
 
@@ -493,7 +605,11 @@ EOF
 	echo -e "  $(msg cert_mode):   ${CYAN}$CERT_TYPE${NC}"
 
 		if [ "$WEB_ENABLED" = "true" ]; then
-			echo -e "  $(msg web_url): ${CYAN}http://$WEB_LISTEN${NC}"
+			if [ "$WEB_TLS_ENABLED" = "true" ] || [ -n "$WEB_TLS_CERT" ]; then
+				echo -e "  $(msg web_url): ${CYAN}https://$WEB_LISTEN${NC}"
+			else
+				echo -e "  $(msg web_url): ${CYAN}http://$WEB_LISTEN${NC}"
+			fi
 			echo -e "  $(msg web_pw): ${YELLOW}$WEB_PASSWORD${NC}"
 		fi
 	echo -e "  $(msg extract_fingerprint)"
