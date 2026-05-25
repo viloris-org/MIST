@@ -16,7 +16,8 @@ func TestParseBoolQuery(t *testing.T) {
 }
 
 func TestParseInboundSet(t *testing.T) {
-	set, err := parseInboundSet("socks,http,redirect")
+	cfg := clientConfig{inbound: "socks,http,redirect"}
+	set, err := cfg.parseInboundSet()
 	if err != nil {
 		t.Fatal(err)
 	}
