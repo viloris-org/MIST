@@ -353,6 +353,23 @@ print_client_guide() {
 	esac
 }
 
+dashboard_url() {
+	local scheme="http"
+	local hostport="$WEB_LISTEN"
+	if [ "$WEB_TLS_ENABLED" = "true" ] || [ -n "$WEB_TLS_CERT" ]; then
+		scheme="https"
+	fi
+	if [ "$WEB_TLS_ENABLED" = "true" ] && [ "$CERT_TYPE" = "acme" ] && [ -n "$CERT_NAME" ]; then
+		local port="${WEB_LISTEN##*:}"
+		if [[ "$port" =~ ^[0-9]+$ ]]; then
+			hostport="$CERT_NAME:$port"
+		else
+			hostport="$CERT_NAME"
+		fi
+	fi
+	printf '%s://%s' "$scheme" "$hostport"
+}
+
 # --- banner ----------------------------------------------------------------
 echo -e "${CYAN}"
 echo "=========================================================="
@@ -552,11 +569,7 @@ echo -e "  $(msg summary_cert):     ${GREEN}$CERT_TYPE${NC}"
 [ "${FALLBACK:-}" ]  && echo -e "  $(msg summary_fallback):  ${CYAN}$FALLBACK${NC}" || echo -e "  $(msg summary_fallback):  ${YELLOW}(none — HTTP 400)${NC}"
 if [ "$WEB_ENABLED" = "true" ]; then
 	echo -e "  $(msg summary_web):     ${GREEN}$(msg summary_web_enabled)${NC}"
-	if [ "$WEB_TLS_ENABLED" = "true" ] || [ -n "$WEB_TLS_CERT" ]; then
-		echo -e "  $(msg web_url):     ${CYAN}https://$WEB_LISTEN${NC}"
-	else
-		echo -e "  $(msg web_url):     ${CYAN}http://$WEB_LISTEN${NC}"
-	fi
+	echo -e "  $(msg web_url):     ${CYAN}$(dashboard_url)${NC}"
 	echo -e "  $(msg web_pw):     ${YELLOW}$WEB_PASSWORD${NC}"
 	[ "$WEB_TLS_ENABLED" = "true" ] && echo -e "  Dashboard TLS:   ${GREEN}Enabled (reusing server certificate)${NC}"
 	[ -n "$WEB_TLS_CERT" ] && echo -e "  Dashboard TLS:   ${GREEN}Enabled${NC}"
@@ -605,11 +618,7 @@ if [[ "${is_systemd:-y}" =~ ^[Yy]$ ]]; then
 	echo -e "  $(msg cert_mode):   ${CYAN}$CERT_TYPE${NC}"
 
 		if [ "$WEB_ENABLED" = "true" ]; then
-			if [ "$WEB_TLS_ENABLED" = "true" ] || [ -n "$WEB_TLS_CERT" ]; then
-				echo -e "  $(msg web_url): ${CYAN}https://$WEB_LISTEN${NC}"
-			else
-				echo -e "  $(msg web_url): ${CYAN}http://$WEB_LISTEN${NC}"
-			fi
+			echo -e "  $(msg web_url): ${CYAN}$(dashboard_url)${NC}"
 			echo -e "  $(msg web_pw): ${YELLOW}$WEB_PASSWORD${NC}"
 		fi
 	echo -e "  $(msg extract_fingerprint)"
