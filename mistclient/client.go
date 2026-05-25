@@ -1,15 +1,16 @@
 package mistclient
 
 import (
-	"mist/proxy"
-	"mist/proxy/padding"
-	"mist/proxy/session"
-	"mist/util"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"net"
 	"time"
+
+	"mist/proxy"
+	"mist/proxy/padding"
+	"mist/proxy/session"
+	"mist/util"
 
 	"MistCore/common/buf"
 	"MistCore/common/bufio"
@@ -94,9 +95,9 @@ func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	proxy.SetTCPFastOpen(conn)
 
 	tlsConn := tls.Client(conn, c.tlsConfig)
-	proxy.SetTCPFastOpen(tlsConn)
 
 	b := buf.NewPacket()
 	defer b.Release()

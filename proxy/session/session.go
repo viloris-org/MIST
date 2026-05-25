@@ -29,6 +29,7 @@ import (
 const (
 	hmacTrailerLen      = 32
 	effectiveMaxPayload = maxFramePayloadLen - hmacTrailerLen
+	maxCoalescedWrite   = 256 * 1024
 )
 
 var clientDebugPaddingScheme = os.Getenv("CLIENT_DEBUG_PADDING_SCHEME") == "1"
@@ -575,37 +576,48 @@ func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
 		return total, nil
 	}
 
-	// Fast path: no padding — batch all chunks into a single write
-	chunks := (len(data) + maxFramePayloadLen - 1) / maxFramePayloadLen
-	totalFrameLen := len(data) + chunks*headerOverHeadSize
-	if cap(s.writeBuffer) < totalFrameLen {
-		s.writeBuffer = make([]byte, totalFrameLen)
-	}
-	frame := s.writeBuffer[:totalFrameLen]
-	offset := 0
+	// Fast path: no padding — coalesce frames, but cap each locked write so a
+	// large application write cannot monopolize the session on a slow link.
+	total := 0
 	remaining := data
 	for len(remaining) > 0 {
-		chunkLen := min(len(remaining), maxFramePayloadLen)
-		frame[offset] = cmdPSH
-		binary.BigEndian.PutUint32(frame[offset+1:], sid)
-		binary.BigEndian.PutUint16(frame[offset+5:], uint16(chunkLen))
-		copy(frame[offset+headerOverHeadSize:], remaining[:chunkLen])
-		offset += headerOverHeadSize + chunkLen
-		remaining = remaining[chunkLen:]
-	}
+		payloadLimit := min(len(remaining), maxCoalescedWrite)
+		chunks := (payloadLimit + maxFramePayloadLen - 1) / maxFramePayloadLen
+		totalFrameLen := payloadLimit + chunks*headerOverHeadSize
+		s.connLock.Lock()
+		if cap(s.writeBuffer) < totalFrameLen {
+			s.writeBuffer = make([]byte, totalFrameLen)
+		}
+		frame := s.writeBuffer[:totalFrameLen]
+		offset := 0
+		batch := remaining[:payloadLimit]
+		for len(batch) > 0 {
+			chunkLen := min(len(batch), maxFramePayloadLen)
+			frame[offset] = cmdPSH
+			binary.BigEndian.PutUint32(frame[offset+1:], sid)
+			binary.BigEndian.PutUint16(frame[offset+5:], uint16(chunkLen))
+			copy(frame[offset+headerOverHeadSize:], batch[:chunkLen])
+			offset += headerOverHeadSize + chunkLen
+			batch = batch[chunkLen:]
+		}
 
-	s.connLock.Lock()
-	defer s.connLock.Unlock()
-	n, err := s.writeConnLocked(frame)
-	if n > chunks*headerOverHeadSize {
-		n -= chunks * headerOverHeadSize
-	} else {
-		n = 0
+		n, err := s.writeConnLocked(frame)
+		s.connLock.Unlock()
+		if n > chunks*headerOverHeadSize {
+			n -= chunks * headerOverHeadSize
+		} else {
+			n = 0
+		}
+		if n > payloadLimit {
+			n = payloadLimit
+		}
+		total += n
+		if err != nil {
+			return total, err
+		}
+		remaining = remaining[payloadLimit:]
 	}
-	if n > len(data) {
-		n = len(data)
-	}
-	return n, err
+	return total, nil
 }
 
 func (s *Session) writePSHFrame(sid uint32, data []byte) error {
