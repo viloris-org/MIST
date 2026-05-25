@@ -17,7 +17,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-//go:embed build/*
+//go:embed build
 var staticFiles embed.FS
 
 // StatusProvider provides runtime metrics for the dashboard.

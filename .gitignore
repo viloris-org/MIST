@@ -17,5 +17,5 @@ CLAUDE.md
 AGENTS.md
 .claude
 web/node_modules
-web/build
+web/build/assets
 web/.svelte-kit
