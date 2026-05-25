@@ -51,14 +51,6 @@ type pipe struct {
 
 func (p *pipe) read(b []byte) (n int, err error) {
 	select {
-	case <-p.done:
-		return 0, p.readCloseError()
-	case <-p.readDeadline.Wait():
-		return 0, os.ErrDeadlineExceeded
-	default:
-	}
-
-	select {
 	case bw := <-p.wrCh:
 		nr := copy(b, bw)
 		p.rdCh <- nr

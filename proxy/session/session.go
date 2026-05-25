@@ -37,8 +37,8 @@ var clientDebugPaddingScheme = os.Getenv("CLIENT_DEBUG_PADDING_SCHEME") == "1"
 var errFramePayloadTooLarge = errors.New("frame payload too large")
 
 type Session struct {
-	conn     net.Conn
-	connLock sync.Mutex
+	conn    net.Conn
+	writeMu sync.Mutex
 
 	streams    map[uint32]*Stream
 	streamId   atomic.Uint32
@@ -47,25 +47,26 @@ type Session struct {
 	dieOnce sync.Once
 	die     chan struct{}
 	dieHook func()
+	closed  atomic.Bool
 
 	synDone     func()
 	synDoneLock sync.Mutex
 
 	// pool
-	seq       uint64
-	createdAt time.Time
-	idleSince time.Time
-	idleUntil time.Time
-	idleMu    sync.Mutex
-	padding   *atomic.TypedValue[*padding.PaddingFactory]
-	peerVersion byte
+	seq          uint64
+	createdAt    time.Time
+	idleSince    time.Time
+	idleUntil    time.Time
+	idleMu       sync.Mutex
+	padding      *atomic.TypedValue[*padding.PaddingFactory]
+	peerVersion  byte
+	frameBufPool sync.Pool
 
 	// client
 	isClient           bool
 	sendPadding        bool
 	buffering          bool
 	buffer             []byte
-	writeBuffer        []byte
 	paddingWriteBuffer []byte
 	paddingBuf         []int
 	pktCounter         atomic.Uint32
@@ -88,8 +89,6 @@ type Session struct {
 	hmacPool         sync.Pool
 	hmacMode         bool
 	authHash         []byte
-	hmacBuf          [4]byte
-	hmacTrailerBuf   [hmacTrailerLen]byte
 	pendingPing      bool
 
 	// SYN rate limit
@@ -135,13 +134,18 @@ func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.Paddin
 		sendPadding:       true,
 		padding:           _padding,
 		createdAt:         time.Now(),
-		writeBuffer:       make([]byte, headerOverHeadSize+maxFramePayloadLen),
 		maxStreams:        maxStreams,
 		readTimeout:       readTimeout,
 		keepaliveInterval: keepaliveInterval,
 		synRateLimit:      synRateLimit,
 		passwordHash:      passwordHash,
 		settingsReceived:  make(chan struct{}),
+	}
+	s.frameBufPool = sync.Pool{
+		New: func() any {
+			buf := make([]byte, headerOverHeadSize+maxFramePayloadLen+hmacTrailerLen)
+			return &buf
+		},
 	}
 	s.die = make(chan struct{})
 	s.streams = make(map[uint32]*Stream)
@@ -154,13 +158,18 @@ func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding 
 		onNewStream:       onNewStream,
 		padding:           _padding,
 		createdAt:         time.Now(),
-		writeBuffer:       make([]byte, headerOverHeadSize+maxFramePayloadLen),
 		maxStreams:        maxStreams,
 		readTimeout:       readTimeout,
 		keepaliveInterval: keepaliveInterval,
 		synRateLimit:      synRateLimit,
 		passwordHash:      passwordHash,
 		authComplete:      make(chan struct{}),
+	}
+	s.frameBufPool = sync.Pool{
+		New: func() any {
+			buf := make([]byte, headerOverHeadSize+maxFramePayloadLen+hmacTrailerLen)
+			return &buf
+		},
 	}
 	s.die = make(chan struct{})
 	s.streams = make(map[uint32]*Stream)
@@ -192,18 +201,14 @@ func (s *Session) Run() {
 
 // IsClosed does a safe check to see if we have shutdown
 func (s *Session) IsClosed() bool {
-	select {
-	case <-s.die:
-		return true
-	default:
-		return false
-	}
+	return s.closed.Load()
 }
 
 // Close is used to close the session and all streams.
 func (s *Session) Close() error {
 	var once bool
 	s.dieOnce.Do(func() {
+		s.closed.Store(true)
 		close(s.die)
 		once = true
 	})
@@ -609,19 +614,23 @@ func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
 		return total, nil
 	}
 
-	// Fast path: no padding — coalesce frames, but cap each locked write so a
-	// large application write cannot monopolize the session on a slow link.
+	// Fast path: no padding — coalesce frames into a pooled buffer.
+	// Frame building runs outside writeMu so multiple streams can prepare
+	// frames concurrently; only the final conn.Write is serialized.
 	total := 0
 	remaining := data
 	for len(remaining) > 0 {
 		payloadLimit := min(len(remaining), maxCoalescedWrite)
 		chunks := (payloadLimit + maxFramePayloadLen - 1) / maxFramePayloadLen
 		totalFrameLen := payloadLimit + chunks*headerOverHeadSize
-		s.connLock.Lock()
-		if cap(s.writeBuffer) < totalFrameLen {
-			s.writeBuffer = make([]byte, totalFrameLen)
+
+		bufPtr := s.frameBufPool.Get().(*[]byte)
+		buf := *bufPtr
+		if cap(buf) < totalFrameLen {
+			buf = make([]byte, totalFrameLen)
+			*bufPtr = buf
 		}
-		frame := s.writeBuffer[:totalFrameLen]
+		frame := buf[:totalFrameLen]
 		offset := 0
 		batch := remaining[:payloadLimit]
 		for len(batch) > 0 {
@@ -634,8 +643,11 @@ func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
 			batch = batch[chunkLen:]
 		}
 
+		s.writeMu.Lock()
 		n, err := s.writeConnLocked(frame)
-		s.connLock.Unlock()
+		s.writeMu.Unlock()
+		s.frameBufPool.Put(bufPtr)
+
 		if n > chunks*headerOverHeadSize {
 			n -= chunks * headerOverHeadSize
 		} else {
@@ -679,29 +691,32 @@ func (s *Session) writeControlFrame(frame frame) (int, error) {
 
 func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
 	trailerLen := 0
+	var hmacTrailerBuf [hmacTrailerLen]byte
 	if s.hmacMode && !isHandshakeFrame(cmd) {
-		trailerLen = s.computeFrameHMAC(s.hmacTrailerBuf[:], cmd, sid, data)
+		trailerLen = s.computeFrameHMAC(hmacTrailerBuf[:], cmd, sid, data)
 	}
 
 	wirePayloadLen := len(data) + trailerLen
 	frameLen := wirePayloadLen + headerOverHeadSize
 
-	s.connLock.Lock()
-	defer s.connLock.Unlock()
-
-	if cap(s.writeBuffer) < frameLen {
-		s.writeBuffer = make([]byte, frameLen)
+	bufPtr := s.frameBufPool.Get().(*[]byte)
+	buf := *bufPtr
+	if cap(buf) < frameLen {
+		buf = make([]byte, frameLen)
+		*bufPtr = buf
 	}
-	frame := s.writeBuffer[:frameLen]
+	frame := buf[:frameLen]
 	frame[0] = cmd
 	binary.BigEndian.PutUint32(frame[1:5], sid)
 	binary.BigEndian.PutUint16(frame[5:7], uint16(wirePayloadLen))
 	copy(frame[headerOverHeadSize:], data)
 	if trailerLen > 0 {
-		copy(frame[headerOverHeadSize+len(data):], s.hmacTrailerBuf[:trailerLen])
+		copy(frame[headerOverHeadSize+len(data):], hmacTrailerBuf[:trailerLen])
 	}
 
 	n, err := s.writeConnLocked(frame)
+	s.frameBufPool.Put(bufPtr)
+
 	if n > headerOverHeadSize {
 		n -= headerOverHeadSize
 	} else {
@@ -714,8 +729,8 @@ func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
 }
 
 func (s *Session) writeConn(b []byte) (n int, err error) {
-	s.connLock.Lock()
-	defer s.connLock.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	return s.writeConnLocked(b)
 }
@@ -789,35 +804,6 @@ func (s *Session) writeConnLocked(b []byte) (n int, err error) {
 	return s.conn.Write(b)
 }
 
-func (s *Session) dataWithWasteFrame(data []byte, paddingLen int) []byte {
-	wasteFrameLen := headerOverHeadSize + paddingLen
-	totalLen := len(data) + wasteFrameLen
-	if cap(s.writeBuffer) < totalLen {
-		s.writeBuffer = make([]byte, totalLen)
-	}
-	s.writeBuffer = s.writeBuffer[:totalLen]
-	copy(s.writeBuffer, data)
-	s.fillWasteFrame(s.writeBuffer[len(data):], paddingLen)
-	return s.writeBuffer
-}
-
-func (s *Session) wasteFrame(paddingLen int) []byte {
-	frameLen := headerOverHeadSize + paddingLen
-	if cap(s.writeBuffer) < frameLen {
-		s.writeBuffer = make([]byte, frameLen)
-	}
-	s.writeBuffer = s.writeBuffer[:frameLen]
-	s.fillWasteFrame(s.writeBuffer, paddingLen)
-	return s.writeBuffer
-}
-
-func (s *Session) fillWasteFrame(frame []byte, paddingLen int) {
-	frame[0] = cmdWaste
-	binary.BigEndian.PutUint32(frame[1:5], 0)
-	binary.BigEndian.PutUint16(frame[5:7], uint16(paddingLen))
-	clear(frame[headerOverHeadSize:])
-}
-
 func appendWasteFrame(dst []byte, paddingLen int) []byte {
 	frameLen := headerOverHeadSize + paddingLen
 	off := len(dst)
@@ -867,13 +853,11 @@ func (s *Session) appendFrameHMAC(dst []byte, cmd byte, sid uint32, payload []by
 	mac := s.hmacPool.Get().(hash.Hash)
 	defer s.hmacPool.Put(mac)
 	mac.Reset()
-	var cmdBuf [1]byte
-	cmdBuf[0] = cmd
-	mac.Write(cmdBuf[:])
-	binary.BigEndian.PutUint32(s.hmacBuf[:], sid)
-	mac.Write(s.hmacBuf[:])
-	binary.BigEndian.PutUint16(s.hmacBuf[:2], uint16(len(payload)))
-	mac.Write(s.hmacBuf[:2])
+	var prefix [7]byte
+	prefix[0] = cmd
+	binary.BigEndian.PutUint32(prefix[1:5], sid)
+	binary.BigEndian.PutUint16(prefix[5:7], uint16(len(payload)))
+	mac.Write(prefix[:])
 	mac.Write(payload)
 	return mac.Sum(dst[:0])
 }
