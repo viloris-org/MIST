@@ -65,6 +65,9 @@ type clientConfig struct {
 
 	webEnabled  bool
 	webListen   string
+	webPassword string
+	webTLSCert string
+	webTLSKey  string
 }
 
 type inboundSet struct {
@@ -244,6 +247,9 @@ func loadConfigFile(cfg *clientConfig) error {
 		DNSUpstream:    cfg.dnsUpstream,
 		Web:            cfg.webEnabled,
 		WebListen:      cfg.webListen,
+		WebPassword:    cfg.webPassword,
+		WebTLSCert:     cfg.webTLSCert,
+		WebTLSKey:      cfg.webTLSKey,
 		StatusJSON:     cfg.statusJSON,
 	}
 	fileCfg.ApplyCLIOverrides(cli)
@@ -272,6 +278,9 @@ func loadConfigFile(cfg *clientConfig) error {
 	cfg.dnsUpstream = strings.Join(fileCfg.DNS.Upstream, ",")
 	cfg.webEnabled = fileCfg.Web.Enabled
 	cfg.webListen = fileCfg.Web.Listen
+	cfg.webPassword = fileCfg.Web.Password
+	cfg.webTLSCert = fileCfg.Web.TLSCert
+	cfg.webTLSKey = fileCfg.Web.TLSKey
 
 	return nil
 }
@@ -479,7 +488,14 @@ func startWeb(cfg clientConfig, gs *globalStatus) *web.Dashboard {
 	if addr == "" {
 		addr = "127.0.0.1:9090"
 	}
-	dash := web.New(addr, gs)
+	var opts []web.Option
+	if cfg.webPassword != "" {
+		opts = append(opts, web.WithPassword(cfg.webPassword))
+	}
+	if cfg.webTLSCert != "" && cfg.webTLSKey != "" {
+		opts = append(opts, web.WithTLS(cfg.webTLSCert, cfg.webTLSKey))
+	}
+	dash := web.New(addr, gs, opts...)
 	dash.Start()
 	return dash
 }
@@ -607,6 +623,9 @@ func parseClientConfig(args []string) (clientConfig, error) {
 	// Web flags.
 	fs.BoolVar(&cfg.webEnabled, "web", false, "enable web dashboard")
 	fs.StringVar(&cfg.webListen, "web-listen", "127.0.0.1:9090", "web dashboard listen address")
+	fs.StringVar(&cfg.webPassword, "web-password", "", "dashboard login password")
+	fs.StringVar(&cfg.webTLSCert, "web-tls-cert", "", "dashboard TLS certificate file")
+	fs.StringVar(&cfg.webTLSKey, "web-tls-key", "", "dashboard TLS key file")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, err

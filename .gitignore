@@ -16,3 +16,6 @@ cert-cache/
 CLAUDE.md
 AGENTS.md
 .claude
+web/node_modules
+web/build
+web/.svelte-kit

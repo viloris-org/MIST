@@ -50,8 +50,11 @@ type DNSConfig struct {
 }
 
 type WebConfig struct {
-	Enabled bool   `toml:"enabled"`
-	Listen  string `toml:"listen"`
+	Enabled  bool   `toml:"enabled"`
+	Listen   string `toml:"listen"`
+	Password string `toml:"password"`
+	TLSCert  string `toml:"tls_cert"`
+	TLSKey   string `toml:"tls_key"`
 }
 
 type LogConfig struct {
