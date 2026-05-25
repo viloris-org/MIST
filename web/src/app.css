@@ -1,19 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-bg text-gray-100 antialiased;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    @apply bg-bg text-text antialiased;
+    font-family: 'Fira Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-feature-settings: 'cv01' 1, 'cv02' 1, 'cv03' 1;
+  }
+
+  ::selection {
+    @apply bg-accent/20 text-text;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border-light;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
 @layer components {
   .card {
-    @apply bg-surface border border-border rounded-lg p-5;
+    @apply bg-surface border border-border rounded-xl p-5 shadow-card;
+    transition: border-color 0.2s ease;
   }
+  .card:hover {
+    @apply border-border-light;
+  }
+
+  .card-glass {
+    @apply bg-surface/70 backdrop-blur-md border border-border/60 rounded-xl p-5;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+  }
+  .card-glass:hover {
+    @apply bg-surface/85 border-border-light/60;
+  }
+
   .card-sm {
-    @apply bg-surface border border-border rounded-lg p-4;
+    @apply bg-surface border border-border rounded-xl p-4 shadow-card;
+    transition: border-color 0.2s ease;
+  }
+  .card-sm:hover {
+    @apply border-border-light;
+  }
+
+  .card-elevated {
+    @apply bg-surface-alt border border-border rounded-xl p-5;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.4);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .card-elevated:hover {
+    @apply border-border-light;
+    box-shadow: 0 6px 16px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.4);
   }
 }

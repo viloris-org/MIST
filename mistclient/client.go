@@ -31,7 +31,8 @@ type Client struct {
 }
 
 type Stats struct {
-	SessionPool session.ClientStats `json:"session_pool"`
+	SessionPool session.ClientStats   `json:"session_pool"`
+	Sessions    []session.SessionInfo `json:"sessions"`
 }
 
 // NewClient creates a new MIST client. It validates the options, fills
@@ -95,7 +96,10 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Stats() Stats {
-	return Stats{SessionPool: c.sessionClient.Stats()}
+	return Stats{
+		SessionPool: c.sessionClient.Stats(),
+		Sessions:    c.sessionClient.Sessions(),
+	}
 }
 
 func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {

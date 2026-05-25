@@ -3,7 +3,8 @@ export default {
 	nav: {
 		dashboard: '仪表盘',
 		sessions: '会话',
-		logs: '日志'
+		logs: '日志',
+		settings: '设置'
 	},
 	login: {
 		title: 'MIST',
@@ -51,12 +52,24 @@ export default {
 		cumulative: '累计',
 		connections: '连接',
 		activeConnections: '活跃连接',
-		acceptedCumulative: '已接受（累计）'
+		acceptedCumulative: '已接受（累计）',
+		detail: '会话详情',
+		seq: '编号',
+		age: '存活时间',
+		streams: '流数',
+		packets: '数据包',
+		state: '状态',
+		running: '活跃',
+		idling: '空闲',
+		noSessions: '暂无活跃会话。'
 	},
 	logs: {
 		title: '日志',
 		serverError: '服务器错误',
 		noErrors: '无错误报告。',
+		liveLogs: '实时日志',
+		lines: '行',
+		noEntries: '暂无日志条目。',
 		connectionInfo: '连接信息',
 		serverAddress: '服务器地址',
 		version: '版本',
@@ -64,6 +77,25 @@ export default {
 		lastUpdated: '最后更新',
 		commit: '提交',
 		buildDate: '构建日期'
+	},
+	settings: {
+		title: '设置',
+		general: '通用',
+		appearance: '外观',
+		connection: '连接',
+		server: '服务器',
+		listenAddr: '监听地址',
+		inbound: '入站类型',
+		redirectListen: '重定向监听',
+		minIdleSession: '最小空闲会话',
+		tlsMinVersion: 'TLS 最低版本',
+		insecure: '不安全 TLS',
+		address: '地址',
+		webDashboard: 'Web 控制台',
+		password: '密码',
+		notSet: '未设置',
+		language: '语言',
+		configHint: '这些设置来自 CLI 参数或 TOML 配置文件。如需修改，请编辑配置文件并重启客户端。'
 	},
 	common: {
 		logout: '退出登录',

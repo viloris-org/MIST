@@ -496,7 +496,9 @@ func startWeb(cfg clientConfig, gs *globalStatus) *web.Dashboard {
 		opts = append(opts, web.WithTLS(cfg.webTLSCert, cfg.webTLSKey))
 	}
 	dash := web.New(addr, gs, opts...)
-	dash.Start()
+	if err := dash.Start(); err != nil {
+		logrus.Errorf("Dashboard: %v", err)
+	}
 	return dash
 }
 
@@ -514,6 +516,7 @@ type globalStatus struct {
 	client     *mistclient.Client
 	tun        *tun.Device
 	dns        *dns.Server
+	cfg        clientConfig
 }
 
 func newGlobalStatus(cfg clientConfig) *globalStatus {
@@ -521,6 +524,7 @@ func newGlobalStatus(cfg clientConfig) *globalStatus {
 		startedAt:   time.Now().UTC(),
 		server:      cfg.serverAddr,
 		serverState: "starting",
+		cfg:         cfg,
 	}
 }
 
@@ -580,6 +584,48 @@ func (gs *globalStatus) StatusJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(body)
+}
+
+// ConfigJSON returns the current client configuration as JSON.
+func (gs *globalStatus) ConfigJSON() ([]byte, error) {
+	gs.mu.Lock()
+	st := gs.serverState
+	le := gs.lastError
+	gs.mu.Unlock()
+
+	cfg := map[string]any{
+		"server":        gs.server,
+		"server_state":  st,
+		"last_error":    le,
+		"listen":        gs.cfg.listen,
+		"inbound":       gs.cfg.inbound,
+		"redirect_listen": gs.cfg.redirectListen,
+		"min_idle_session": gs.cfg.minIdleSession,
+		"tls_min_version":  gs.cfg.tlsMinVersion,
+		"insecure":         gs.cfg.insecure,
+	}
+
+	if gs.tun != nil {
+		cfg["tun"] = map[string]any{
+			"name":    gs.cfg.tunName,
+			"mtu":     gs.cfg.tunMTU,
+			"address": gs.cfg.tunAddr,
+		}
+	}
+	if gs.dns != nil {
+		cfg["dns"] = map[string]any{
+			"listen":   gs.cfg.dnsListen,
+			"upstream": gs.cfg.dnsUpstream,
+		}
+	}
+	if gs.cfg.webEnabled {
+		cfg["web"] = map[string]any{
+			"listen": gs.cfg.webListen,
+			"has_password": gs.cfg.webPassword != "",
+		}
+	}
+
+	return json.Marshal(cfg)
 }
 
 // --- CLI parsing ---

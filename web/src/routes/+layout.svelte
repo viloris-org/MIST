@@ -40,52 +40,91 @@
 	function isLoginPage(path: string) {
 		return path.startsWith('/login');
 	}
+
+	function isActive(path: string, target: string) {
+		if (target === '/') return path === '/';
+		return path.startsWith(target);
+	}
 </script>
 
 {#if $isChecking}
 	<div class="min-h-screen flex items-center justify-center bg-bg">
-		<div class="text-dim text-sm">{$tr('common.loading')}</div>
+		<div class="text-dim text-sm animate-pulse">{$tr('common.loading')}</div>
 	</div>
 {:else if isLoginPage($page.url.pathname)}
 	{@render children()}
 {:else if authed}
-	<div class="min-h-screen flex flex-col">
+	<div class="min-h-screen flex flex-col bg-bg">
 		<!-- Header -->
-		<header class="border-b border-border bg-surface/50 backdrop-blur">
-			<div class="max-w-5xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-				<div class="flex items-center gap-6">
-					<a href="/" class="text-lg font-semibold tracking-wide">MIST</a>
-					<nav class="flex items-center gap-1">
-						<a href="/" class="px-3 py-1.5 rounded text-sm text-dim hover:text-gray-100 hover:bg-surface transition-colors">
-							{$tr('nav.dashboard')}
-						</a>
-						<a href="/sessions" class="px-3 py-1.5 rounded text-sm text-dim hover:text-gray-100 hover:bg-surface transition-colors">
-							{$tr('nav.sessions')}
-						</a>
-						<a href="/logs" class="px-3 py-1.5 rounded text-sm text-dim hover:text-gray-100 hover:bg-surface transition-colors">
-							{$tr('nav.logs')}
-						</a>
+		<header class="sticky top-0 z-50 border-b border-border/50 bg-surface/80 backdrop-blur-lg">
+			<div class="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+				<div class="flex items-center gap-8">
+					<a href="/" class="text-lg font-semibold tracking-tight font-mono text-text">
+						<span class="text-accent">M</span>IST
+					</a>
+					<nav class="hidden sm:flex items-center gap-0.5">
+						{#each [
+							['/', 'nav.dashboard'],
+							['/sessions', 'nav.sessions'],
+							['/logs', 'nav.logs'],
+							['/settings', 'nav.settings']
+						] as [href, label]}
+							<a
+								{href}
+								class="relative px-3 py-1.5 rounded-lg text-sm transition-colors duration-200 cursor-pointer
+									{isActive(currentPath, href)
+										? 'text-text bg-accent/10'
+										: 'text-dim hover:text-dim-light hover:bg-surface-alt'}"
+							>
+								{$tr(label)}
+								{#if isActive(currentPath, href)}
+									<span class="absolute bottom-0 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-accent rounded-full"></span>
+								{/if}
+							</a>
+						{/each}
 					</nav>
 				</div>
-				<div class="flex items-center gap-4">
-					<StatusBadge />
-					<span class="text-sm text-dim tabular-nums hidden sm:inline">{$uptime}</span>
 
-					<!-- Language switcher -->
-					<div class="relative">
-						<button
-							onclick={() => locale.set($locale === 'en' ? 'zh' : 'en')}
-							class="text-xs text-dim hover:text-gray-100 transition-colors cursor-pointer border border-border rounded px-1.5 py-0.5"
-							title="{$tr('common.language')}"
-						>
-							{$locale === 'en' ? 'EN' : '中'}
-						</button>
+				<div class="flex items-center gap-3">
+					<div class="hidden sm:flex items-center gap-3">
+						<StatusBadge />
+						<span class="text-xs text-dim tabular-nums font-mono">{$uptime}</span>
 					</div>
+
+					<!-- Mobile nav -->
+					<div class="sm:hidden flex items-center gap-1">
+						{#each [
+							['/', 'nav.dashboard'],
+							['/sessions', 'nav.sessions'],
+							['/logs', 'nav.logs'],
+							['/settings', 'nav.settings']
+						] as [href, label]}
+							<a
+								{href}
+								class="px-2 py-1 rounded text-xs transition-colors duration-200 cursor-pointer
+									{isActive(currentPath, href)
+										? 'text-text bg-accent/10'
+										: 'text-dim hover:text-dim-light'}"
+							>
+								{$tr(label)}
+							</a>
+						{/each}
+					</div>
+
+					<div class="h-5 w-px bg-border hidden sm:block"></div>
+
+					<button
+						onclick={() => locale.set($locale === 'en' ? 'zh' : 'en')}
+						class="text-xs font-medium text-dim hover:text-text transition-colors duration-200 cursor-pointer
+							border border-border hover:border-border-light rounded-md px-1.5 py-0.5"
+					>
+						{$locale === 'en' ? 'EN' : '中'}
+					</button>
 
 					<button
 						onclick={handleLogout}
-						class="text-sm text-dim hover:text-gray-100 transition-colors cursor-pointer"
-						title="{$tr('common.logout')}"
+						class="text-dim hover:text-red transition-colors duration-200 cursor-pointer p-1"
+						title={$tr('common.logout')}
 					>
 						<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 							<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -97,12 +136,12 @@
 			</div>
 		</header>
 
-		<main class="flex-1 max-w-5xl mx-auto px-4 sm:px-6 py-6 w-full">
+		<main class="flex-1 max-w-6xl mx-auto px-4 sm:px-6 py-8 w-full animate-fade-in">
 			{@render children()}
 		</main>
 
-		<footer class="border-t border-border py-4 text-center">
-			<span class="text-xs text-dim">mist/{$status?.version ?? '--'}</span>
+		<footer class="border-t border-border/50 py-4 text-center">
+			<span class="text-xs text-dim font-mono">mist/{$status?.version ?? '--'}</span>
 		</footer>
 	</div>
 {:else}

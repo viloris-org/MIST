@@ -1,171 +1,258 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # ====================================================================
-#  MIST (薄雾) Server 一键交互式安装与自启动配置脚本 (Multilingual)
+#  MIST (薄雾) Server — one-click interactive install & systemd setup
 # ====================================================================
 
-# 终端颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-NC='\033[0;37m' # 无颜色
+# --- i18n ------------------------------------------------------------------
+declare -A T
+if [[ "$LANG" =~ ^zh ]]; then
+	T[title]="MIST (薄雾) Server 一键配置与安装助手"
+	T[err_root]="请使用 root 权限运行此脚本 (例如: sudo bash install.sh)"
+	T[check_bin]="检查 mist-server 二进制文件..."
+	T[bin_found]="找到当前目录下的 mist-server 二进制。"
+	T[bin_not_found]="当前目录未找到 mist-server 二进制，正在下载预编译版本..."
+	T[download_fail]="下载 mist-server 失败，尝试使用 Go 进行本地编译..."
+	T[compiling]="正在编译 mist-server..."
+	T[compile_success]="编译成功！"
+	T[compile_fail]="编译失败，请确保 Go 环境及依赖完整。"
+	T[go_env_fail]="未检测到 Go 环境且当前目录下没有 mist-server 二进制。请先编译或安装 Go。"
+	T[config_collect]="交互式配置参数进行中..."
+	T[prompt_port]="请输入服务监听端口"
+	T[prompt_pw]="请输入连接密码"
+	T[default_random]="默认随机"
+	T[default]="默认"
+	T[cert_mode_title]="请选择您的 TLS 证书管理模式："
+	T[cert_mode_self]="自签名证书模式 (self-signed) - 适合本地、内网或带指纹锁定的私密场景 (默认)"
+	T[cert_mode_acme]="Let's Encrypt 证书模式 (acme) - 自动申请和续签公开域名证书，公网抗封锁最强"
+	T[cert_mode_custom]="自定义证书文件模式 (custom)  - 使用您自己已有的证书和私钥文件"
+	T[prompt_choice]="请选择模式"
+	T[err_acme_domain]="域名模式下必须指定证书域名，请重新输入"
+	T[prompt_domain]="请输入您已解析到当前服务器的裸域名 (Domain)"
+	T[prompt_acme_port]="请输入 ACME 挑战验证端口"
+	T[prompt_acme_cache]="请输入 ACME 缓存存放路径"
+	T[prompt_acme_email]="请输入您的 ACME 注册邮箱 (可选)"
+	T[prompt_cert_path]="请输入您的证书 file 路径 (PEM 格式 cert-file)"
+	T[err_file_not_found]="文件不存在，请重新输入"
+	T[prompt_key_path]="请输入您的私钥 file 路径 (key-file)"
+	T[prompt_self_name]="请输入自签名证书名称或 IP 地址 [默认自动推断]"
+	T[prompt_fallback]="请输入非授权流量回落地址 (如 127.0.0.1:80，留空默认返回 HTTP 400)"
+	T[web_title]="Web 管理面板配置"
+	T[prompt_web_enable]="是否启用 Web 管理面板? (y/n)"
+	T[prompt_web_listen]="请输入管理面板监听地址"
+	T[prompt_web_pw]="请输入管理面板登录密码 (留空则不启用密码认证)"
+	T[prompt_web_tls]="是否为管理面板启用 TLS/HTTPS? (y/n)"
+	T[prompt_web_tls_cert]="请输入管理面板 TLS 证书文件路径"
+	T[prompt_web_tls_key]="请输入管理面板 TLS 私钥文件路径"
+	T[summary_web]="管理面板"
+	T[summary_web_enabled]="已启用"
+	T[summary_web_disabled]="未启用"
+	T[web_url]="管理面板地址"
+	T[web_pw]="管理面板密码"
+	T[summary_title]="配置确认"
+	T[summary_port]="监听端口"
+	T[summary_pw]="连接密码"
+	T[summary_cert]="证书模式"
+	T[summary_fallback]="回落地址"
+	T[confirm_install]="确认以上配置并开始安装? (y/n)"
+	T[install_cancelled]="安装已取消。"
+	T[service_config]="配置服务运行方式..."
+	T[prompt_systemd]="是否将 MIST Server 安装为 Systemd 开机自启动服务? (y/n)"
+	T[installing_systemd]="正在为您配置 Systemd 自启动服务..."
+	T[systemd_success]="MIST Server 已成功安装并以 Systemd 服务自启动运行！"
+	T[deploy_result]="部署结果与客户端连接指引："
+	T[status]="服务状态"
+	T[status_active]="已启动并启用自启动"
+	T[server_addr]="服务器地址"
+	T[server_port]="服务端口"
+	T[connect_pw]="连接密码"
+	T[cert_mode]="证书模式"
+	T[extract_fingerprint]="正在为您提取证书 SHA-256 指纹..."
+	T[cert_fingerprint]="证书指纹"
+	T[client_cmd]="客户端一键连接指令"
+	T[fingerprint_hint]="暂时未能在日志中抓取到 SHA-256，可能启动中，请运行此命令手动获取指纹"
+	T[extract_custom]="正在从自定义证书中提取 SHA-256 指纹..."
+	T[client_conn_type]="客户端连接方式"
+	T[client_conn_custom_hint]="根据您的自定义证书域，使用 IP + SNI，或直接使用解析到该 IP 的域名连入。"
+	T[gen_start_sh]="正在为您生成本地前台启动脚本 start.sh..."
+	T[start_sh_success]="启动脚本已生成！您可以执行 ./start.sh 运行服务器。"
+else
+	T[title]="MIST Server Configuration & Installation Assistant"
+	T[err_root]="Please run this script with root privileges (e.g. sudo bash install.sh)"
+	T[check_bin]="Checking mist-server binary..."
+	T[bin_found]="mist-server binary found in the current directory."
+	T[bin_not_found]="mist-server binary not found, downloading prebuilt binary..."
+	T[download_fail]="Failed to download mist-server, attempting to compile locally using Go..."
+	T[compiling]="Compiling mist-server..."
+	T[compile_success]="Compilation succeeded!"
+	T[compile_fail]="Compilation failed. Please ensure the Go environment and dependencies are complete."
+	T[go_env_fail]="Go environment not found and mist-server binary not found. Please install Go or build first."
+	T[config_collect]="Interactive parameter configuration in progress..."
+	T[prompt_port]="Please enter the service listening port"
+	T[prompt_pw]="Please enter the connection password"
+	T[default_random]="default random"
+	T[default]="default"
+	T[cert_mode_title]="Please select your TLS certificate management mode:"
+	T[cert_mode_self]="Self-signed mode (self-signed) - suitable for local, internal, or pinned SHA-256 setups (Default)"
+	T[cert_mode_acme]="Let's Encrypt mode (acme) - auto-apply & renew public domain certificates (Strongest anti-blocking)"
+	T[cert_mode_custom]="Custom certificate mode (custom) - use your own existing certificate and private key files"
+	T[prompt_choice]="Please select mode"
+	T[err_acme_domain]="Domain mode requires a certificate domain. Please enter again"
+	T[prompt_domain]="Please enter the bare domain resolved to this server (Domain)"
+	T[prompt_acme_port]="Please enter the ACME HTTP-01 challenge port"
+	T[prompt_acme_cache]="Please enter the ACME cache path"
+	T[prompt_acme_email]="Please enter your ACME email (Optional)"
+	T[prompt_cert_path]="Please enter your certificate file path (PEM format cert-file)"
+	T[err_file_not_found]="File does not exist, please enter again"
+	T[prompt_key_path]="Please enter your private key file path (key-file)"
+	T[prompt_self_name]="Please enter self-signed certificate name or IP [Default auto-derived]"
+	T[prompt_fallback]="Please enter unauthorized traffic fallback address (e.g. 127.0.0.1:80, leave empty for HTTP 400)"
+	T[web_title]="Web Dashboard Configuration"
+	T[prompt_web_enable]="Enable the web dashboard? (y/n)"
+	T[prompt_web_listen]="Please enter the dashboard listen address"
+	T[prompt_web_pw]="Please enter the dashboard login password (leave empty to disable authentication)"
+	T[prompt_web_tls]="Enable TLS/HTTPS for the dashboard? (y/n)"
+	T[prompt_web_tls_cert]="Please enter the dashboard TLS certificate file path"
+	T[prompt_web_tls_key]="Please enter the dashboard TLS private key file path"
+	T[summary_web]="Dashboard"
+	T[summary_web_enabled]="Enabled"
+	T[summary_web_disabled]="Disabled"
+	T[web_url]="Dashboard URL"
+	T[web_pw]="Dashboard Password"
+	T[summary_title]="Configuration Summary"
+	T[summary_port]="Listening Port"
+	T[summary_pw]="Connection Password"
+	T[summary_cert]="Certificate Mode"
+	T[summary_fallback]="Fallback Address"
+	T[confirm_install]="Proceed with the above configuration? (y/n)"
+	T[install_cancelled]="Installation cancelled."
+	T[service_config]="Configuring service runtime mode..."
+	T[prompt_systemd]="Install MIST Server as a Systemd service to auto-start on boot? (y/n)"
+	T[installing_systemd]="Configuring Systemd service..."
+	T[systemd_success]="MIST Server has been successfully installed and started as a Systemd service!"
+	T[deploy_result]="Deployment results & client connection instructions:"
+	T[status]="Service Status"
+	T[status_active]="Started and enabled on boot"
+	T[server_addr]="Server Address"
+	T[server_port]="Service Port"
+	T[connect_pw]="Connection Password"
+	T[cert_mode]="Cert Mode"
+	T[extract_fingerprint]="Extracting certificate SHA-256 fingerprint..."
+	T[cert_fingerprint]="Cert Fingerprint"
+	T[client_cmd]="Client connection command"
+	T[fingerprint_hint]="Could not catch SHA-256 fingerprint in logs yet. It might still be starting. Run this to check"
+	T[extract_custom]="Extracting SHA-256 fingerprint from custom certificate..."
+	T[client_conn_type]="Client connection details"
+	T[client_conn_custom_hint]="Use IP + SNI, or directly connect with the domain resolving to this IP according to your custom cert."
+	T[gen_start_sh]="Generating local foreground startup script start.sh..."
+	T[start_sh_success]="Startup script start.sh generated! You can run the server via ./start.sh"
+fi
+
+msg() { echo "${T[$1]:-$1}"; }
+
+# --- helpers ---------------------------------------------------------------
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
+BLUE='\033[0;34m'; PURPLE='\033[0;35m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 DOWNLOAD_BASE="${DOWNLOAD_BASE:-https://github.com/viloris-org/MIST/releases/latest/download}"
 BIN_NAME="mist-server"
 
-# 自动检测语言 (中文/英文)
-LANG_CODE="en"
-if [[ "$LANG" =~ ^zh ]]; then
-    LANG_CODE="zh"
-fi
+die()  { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
+info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+ok()   { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
-# 多语言字典辅助函数
-msg() {
-    local key="$1"
-    case "$LANG_CODE" in
-        zh)
-            case "$key" in
-                err_root) echo "请使用 root 权限运行此脚本 (例如: sudo bash install.sh)" ;;
-                check_bin) echo "检查 mist-server 二进制文件..." ;;
-                bin_found) echo "找到当前目录下的 mist-server 二进制。" ;;
-                bin_not_found) echo "当前目录未找到 mist-server 二进制，正在下载预编译版本..." ;;
-                download_fail) echo "下载 mist-server 失败，尝试使用 Go 进行本地编译..." ;;
-                compiling) echo "正在编译 mist-server..." ;;
-                compile_success) echo "编译成功！" ;;
-                compile_fail) echo "编译失败，请确保 Go 环境及依赖完整。" ;;
-                go_env_fail) echo "未检测到 Go 环境且当前目录下没有 mist-server 二进制。请先编译或安装 Go。" ;;
-                config_collect) echo "交互式配置参数进行中..." ;;
-                prompt_port) echo "请输入服务监听端口" ;;
-                prompt_pw) echo "请输入连接密码" ;;
-                default_random) echo "默认随机" ;;
-                default) echo "默认" ;;
-                cert_mode_title) echo "请选择您的 TLS 证书管理模式：" ;;
-                cert_mode_self) echo "自签名证书模式 (self-signed) - 适合本地、内网或带指纹锁定的私密场景 (默认)" ;;
-                cert_mode_acme) echo "Let's Encrypt 证书模式 (acme) - 自动申请和续签公开域名证书，公网抗封锁最强" ;;
-                cert_mode_custom) echo "自定义证书文件模式 (custom)  - 使用您自己已有的证书和私钥文件" ;;
-                prompt_choice) echo "请选择模式" ;;
-                err_acme_domain) echo "域名模式下必须指定证书域名，请重新输入" ;;
-                prompt_domain) echo "请输入您已解析到当前服务器的裸域名 (Domain)" ;;
-                prompt_acme_port) echo "请输入 ACME 挑战验证端口" ;;
-                prompt_acme_cache) echo "请输入 ACME 缓存存放路径" ;;
-                prompt_acme_email) echo "请输入您的 ACME 注册邮箱 (可选)" ;;
-                prompt_cert_path) echo "请输入您的证书 file 路径 (PEM 格式 cert-file)" ;;
-                err_file_not_found) echo "文件不存在，请重新输入" ;;
-                prompt_key_path) echo "请输入您的私钥 file 路径 (key-file)" ;;
-                prompt_self_name) echo "请输入自签名证书名称或 IP 地址 [默认自动推断]" ;;
-                prompt_fallback) echo "请输入非授权流量回落地址 (如 127.0.0.1:80，留空默认返回 HTTP 400)" ;;
-                service_config) echo "配置服务运行方式..." ;;
-                prompt_systemd) echo "是否将 MIST Server 安装为 Systemd 开机自启动服务? (y/n)" ;;
-                installing_systemd) echo "正在为您配置 Systemd 自启动服务..." ;;
-                systemd_success) echo "MIST Server 已成功安装并以 Systemd 服务自启动运行！" ;;
-                deploy_result) echo "部署结果与客户端连接指引：" ;;
-                status) echo "服务状态" ;;
-                status_active) echo "已启动并启用自启动" ;;
-                server_addr) echo "服务器地址" ;;
-                server_port) echo "服务端口" ;;
-                connect_pw) echo "连接密码" ;;
-                cert_mode) echo "证书模式" ;;
-                extract_fingerprint) echo "正在为您提取证书 SHA-256 指纹..." ;;
-                cert_fingerprint) echo "证书指纹" ;;
-                client_cmd) echo "客户端一键连接指令" ;;
-                fingerprint_hint) echo "暂时未能在日志中抓取到 SHA-256，可能启动中，请运行此命令手动获取指纹" ;;
-                extract_custom) echo "正在从自定义证书中提取 SHA-256 指纹..." ;;
-                client_conn_type) echo "客户端连接方式" ;;
-                client_conn_custom_hint) echo "根据您的自定义证书域，使用 IP + SNI，或直接使用解析到该 IP 的域名连入。" ;;
-                gen_start_sh) echo "正在为您生成本地前台启动脚本 start.sh..." ;;
-                start_sh_success) echo "启动脚本已生成！您可以执行 ./start.sh 运行服务器。" ;;
-                assistant_title) echo "MIST (薄雾) Server 一键配置与安装助手" ;;
-            esac
-            ;;
-        *)
-            case "$key" in
-                err_root) echo "Please run this script with root privileges (e.g. sudo bash install.sh)" ;;
-                check_bin) echo "Checking mist-server binary..." ;;
-                bin_found) echo "mist-server binary found in the current directory." ;;
-                bin_not_found) echo "mist-server binary not found, downloading prebuilt binary..." ;;
-                download_fail) echo "Failed to download mist-server, attempting to compile locally using Go..." ;;
-                compiling) echo "Compiling mist-server..." ;;
-                compile_success) echo "Compilation succeeded!" ;;
-                compile_fail) echo "Compilation failed. Please ensure the Go environment and dependencies are complete." ;;
-                go_env_fail) echo "Go environment not found and mist-server binary not found. Please install Go or build first." ;;
-                config_collect) echo "Interactive parameter configuration in progress..." ;;
-                prompt_port) echo "Please enter the service listening port" ;;
-                prompt_pw) echo "Please enter the connection password" ;;
-                default_random) echo "default random" ;;
-                default) echo "default" ;;
-                cert_mode_title) echo "Please select your TLS certificate management mode:" ;;
-                cert_mode_self) echo "Self-signed mode (self-signed) - suitable for local, internal, or pinned SHA-256 setups (Default)" ;;
-                cert_mode_acme) echo "Let's Encrypt mode (acme) - auto-apply & renew public domain certificates (Strongest anti-blocking)" ;;
-                cert_mode_custom) echo "Custom certificate mode (custom) - use your own existing certificate and private key files" ;;
-                prompt_choice) echo "Please select mode" ;;
-                err_acme_domain) echo "Domain mode requires a certificate domain. Please enter again" ;;
-                prompt_domain) echo "Please enter the bare domain resolved to this server (Domain)" ;;
-                prompt_acme_port) echo "Please enter the ACME HTTP-01 challenge port" ;;
-                prompt_acme_cache) echo "Please enter the ACME cache path" ;;
-                prompt_acme_email) echo "Please enter your ACME email (Optional)" ;;
-                prompt_cert_path) echo "Please enter your certificate file path (PEM format cert-file)" ;;
-                err_file_not_found) echo "File does not exist, please enter again" ;;
-                prompt_key_path) echo "Please enter your private key file path (key-file)" ;;
-                prompt_self_name) echo "Please enter self-signed certificate name or IP [Default auto-derived]" ;;
-                prompt_fallback) echo "Please enter unauthorized traffic fallback address (e.g. 127.0.0.1:80, leave empty for HTTP 400)" ;;
-                service_config) echo "Configuring service runtime mode..." ;;
-                prompt_systemd) echo "Install MIST Server as a Systemd service to auto-start on boot? (y/n)" ;;
-                installing_systemd) echo "Configuring Systemd service..." ;;
-                systemd_success) echo "MIST Server has been successfully installed and started as a Systemd service!" ;;
-                deploy_result) echo "Deployment results & client connection instructions:" ;;
-                status) echo "Service Status" ;;
-                status_active) echo "Started and enabled on boot" ;;
-                server_addr) echo "Server Address" ;;
-                server_port) echo "Service Port" ;;
-                connect_pw) echo "Connection PW" ;;
-                cert_mode) echo "Cert Mode" ;;
-                extract_fingerprint) echo "Extracting certificate SHA-256 fingerprint..." ;;
-                cert_fingerprint) echo "Cert Fingerprint" ;;
-                client_cmd) echo "Client connection command" ;;
-                fingerprint_hint) echo "Could not catch SHA-256 fingerprint in logs yet. It might still be starting. Run this to check" ;;
-                extract_custom) echo "Extracting SHA-256 fingerprint from custom certificate..." ;;
-                client_conn_type) echo "Client connection details" ;;
-                client_conn_custom_hint) echo "Use IP + SNI, or directly connect with the domain resolving to this IP according to your custom cert." ;;
-                gen_start_sh) echo "Generating local foreground startup script start.sh..." ;;
-                start_sh_success) echo "Startup script start.sh generated! You can run the server via ./start.sh" ;;
-                assistant_title) echo "MIST Server Configuration & Installation Assistant" ;;
-            esac
-            ;;
-    esac
-}
-
-if [ -t 0 ]; then
-    INPUT_TTY="/dev/stdin"
-elif [ -r /dev/tty ]; then
-    INPUT_TTY="/dev/tty"
-else
-    echo -e "${RED}[ERROR]${NC} This installer requires an interactive terminal."
-    exit 1
+# Ensure we can read user input even when piped
+if [ -t 0 ]; then INPUT_TTY="/dev/stdin"
+elif [ -r /dev/tty ]; then INPUT_TTY="/dev/tty"
+else die "This installer requires an interactive terminal."
 fi
 
 ask() {
-    local prompt="$1"
-    local var_name="$2"
-    read -r -p "$prompt" "$var_name" < "$INPUT_TTY"
+	local prompt="$1" var_name="$2"
+	read -r -p "$prompt" "$var_name" < "$INPUT_TTY"
 }
 
 detect_platform() {
-    case "$(uname -s)" in
-        Linux) ;;
-        *) return 1 ;;
-    esac
-
-    case "$(uname -m)" in
-        x86_64|amd64) echo "linux-amd64" ;;
-        aarch64|arm64) echo "linux-arm64" ;;
-        *) return 1 ;;
-    esac
+	case "$(uname -s)" in Linux) ;; *) return 1 ;; esac
+	case "$(uname -m)" in
+		x86_64|amd64)  echo "linux-amd64" ;;
+		aarch64|arm64) echo "linux-arm64" ;;
+		*) return 1 ;;
+	esac
 }
 
-# 打印漂亮的横幅
+download() {
+	local url="$1" dest="$2"
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL "$url" -o "$dest" || { rm -f "$dest"; return 1; }
+	elif command -v wget >/dev/null 2>&1; then
+		wget -q "$url" -O "$dest" || { rm -f "$dest"; return 1; }
+	else
+		return 1
+	fi
+}
+
+# Build server argument string from collected config
+build_args() {
+	local args="-l 0.0.0.0:$PORT -p $PASSWORD -cert-type $CERT_TYPE"
+	case "$CERT_TYPE" in
+		self-signed)
+			[ -n "$CERT_NAME" ] && args="$args -cert-name $CERT_NAME" ;;
+		acme)
+			args="$args -cert-name $CERT_NAME -acme-http $ACME_HTTP -acme-cache $ACME_CACHE"
+			[ -n "$ACME_EMAIL" ] && args="$args -acme-email $ACME_EMAIL" ;;
+		custom)
+			args="$args -cert-file $CERT_FILE -key-file $KEY_FILE" ;;
+	esac
+	[ -n "$FALLBACK" ] && args="$args -fallback $FALLBACK"
+	# Web dashboard flags.
+	if [ "$WEB_ENABLED" = "true" ]; then
+		args="$args -web -web-listen $WEB_LISTEN"
+		[ -n "$WEB_PASSWORD" ] && args="$args -web-password $WEB_PASSWORD"
+		[ -n "$WEB_TLS_CERT" ] && args="$args -web-tls-cert $WEB_TLS_CERT -web-tls-key $WEB_TLS_KEY"
+	fi
+	echo "$args"
+}
+
+# Extract SHA-256 fingerprint from journalctl with retry
+extract_fingerprint() {
+	local sha256=""
+	for i in $(seq 1 10); do
+		sha256=$(journalctl -u mist-server -n 50 --no-pager 2>/dev/null | grep -oE 'sha256 [0-9a-fA-F]{64}' | awk '{print $2}' | tail -1)
+		[ -n "$sha256" ] && break
+		sleep 1
+	done
+	echo "$sha256"
+}
+
+# Print client connection instructions based on cert type
+print_client_guide() {
+	local sha256="$1"
+	case "$CERT_TYPE" in
+		self-signed)
+			if [ -n "$sha256" ]; then
+				echo -e "  $(msg cert_fingerprint):   ${GREEN}$sha256${NC}"
+				echo -e "\n  👉 ${PURPLE}$(msg client_cmd):${NC}"
+				echo -e "  ./mist-client -l 127.0.0.1:1080 -s $PUBLIC_IP:$PORT -p $PASSWORD -tls-cert-sha256 $sha256"
+			else
+				echo -e "  ${YELLOW}[INFO]${NC} $(msg fingerprint_hint):"
+				echo -e "  journalctl -u mist-server -n 20 --no-pager"
+			fi ;;
+		acme)
+			echo -e "\n  👉 ${PURPLE}$(msg client_cmd):${NC}"
+			echo -e "  ./mist-client -l 127.0.0.1:1080 -s $CERT_NAME:$PORT -p $PASSWORD" ;;
+		custom)
+			if [ -n "$sha256" ]; then
+				echo -e "  $(msg cert_fingerprint):   ${GREEN}$sha256${NC}"
+			fi
+			echo -e "\n  👉 ${PURPLE}$(msg client_conn_type):${NC}"
+			echo -e "  $(msg client_conn_custom_hint)" ;;
+	esac
+}
+
+# --- banner ----------------------------------------------------------------
 echo -e "${CYAN}"
 echo "=========================================================="
 echo " __  __ ___ ____ _____ "
@@ -174,65 +261,66 @@ echo "| |\/| || |\___ \ | |  "
 echo "| |  | || | ___) || |  "
 echo "|_|  |_|___|____/ |_|  "
 echo "                               "
-echo "        $(msg assistant_title)"
+echo "        $(msg title)"
 echo "=========================================================="
 echo -e "${NC}"
 
-# 1. 权限检查
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}[ERROR]${NC} $(msg err_root)"
-    exit 1
-fi
+# --- 1. privilege check ----------------------------------------------------
+[ "$EUID" -eq 0 ] || die "$(msg err_root)"
 
-# 2. 检测并下载/编译 mist-server
-echo -e "${BLUE}[1/4]${NC} $(msg check_bin)"
+# --- 2. acquire binary -----------------------------------------------------
+info "[1/5] $(msg check_bin)"
 if [ -f "./mist-server" ]; then
-    echo -e "${GREEN}[SUCCESS]${NC} $(msg bin_found)"
+	ok "$(msg bin_found)"
 else
-    echo -e "${YELLOW}[INFO]${NC} $(msg bin_not_found)"
-    PLATFORM=$(detect_platform || true)
-    if [ -n "$PLATFORM" ]; then
-        DOWNLOAD_URL="${DOWNLOAD_BASE}/${BIN_NAME}-${PLATFORM}"
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL "$DOWNLOAD_URL" -o "./mist-server" || rm -f "./mist-server"
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q "$DOWNLOAD_URL" -O "./mist-server" || rm -f "./mist-server"
-        fi
-    fi
-
-    if [ -f "./mist-server" ]; then
-        chmod +x ./mist-server
-        echo -e "${GREEN}[SUCCESS]${NC} $(msg bin_found)"
-    else
-        echo -e "${YELLOW}[INFO]${NC} $(msg download_fail)"
-        if command -v go >/dev/null 2>&1; then
-            echo -e "${BLUE}$(msg compiling)...${NC}"
-            if go build -o mist-server ./cmd/mist-server; then
-                echo -e "${GREEN}[SUCCESS]${NC} $(msg compile_success)"
-            else
-                echo -e "${RED}[ERROR]${NC} $(msg compile_fail)"
-                exit 1
-            fi
-        else
-            echo -e "${RED}[ERROR]${NC} $(msg go_env_fail)"
-            exit 1
-        fi
-    fi
+	info "$(msg bin_not_found)"
+	PLATFORM=$(detect_platform || true)
+	if [ -n "$PLATFORM" ]; then
+		TMPBIN="$(mktemp /tmp/mist-server.XXXXXX)"
+		DOWNLOAD_URL="${DOWNLOAD_BASE}/${BIN_NAME}-${PLATFORM}"
+		if download "$DOWNLOAD_URL" "$TMPBIN"; then
+			mv "$TMPBIN" ./mist-server
+			chmod +x ./mist-server
+			ok "$(msg bin_found)"
+		else
+			rm -f "$TMPBIN"
+			info "$(msg download_fail)"
+			if command -v go >/dev/null 2>&1; then
+				info "$(msg compiling)..."
+				go build -o mist-server ./cmd/mist-server && ok "$(msg compile_success)" || die "$(msg compile_fail)"
+			else
+				die "$(msg go_env_fail)"
+			fi
+		fi
+	else
+		if command -v go >/dev/null 2>&1; then
+			info "$(msg compiling)..."
+			go build -o mist-server ./cmd/mist-server && ok "$(msg compile_success)" || die "$(msg compile_fail)"
+		else
+			die "$(msg go_env_fail)"
+		fi
+	fi
 fi
 
-# 3. 交互式参数收集
-echo -e "\n${BLUE}[2/4]${NC} $(msg config_collect)"
+# --- 3. interactive config -------------------------------------------------
+echo -e "\n${BLUE}[2/5]${NC} $(msg config_collect)"
 
-# 3.1 监听端口
-ask "$(msg prompt_port) [$(msg default): 8443]: " input_port
-PORT=${input_port:-8443}
+# port (with validation)
+while true; do
+	ask "$(msg prompt_port) [$(msg default): 8443]: " input_port
+	PORT=${input_port:-8443}
+	if [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
+		break
+	fi
+	echo -e "${RED}[ERROR]${NC} Invalid port (1-65535). Please try again."
+done
 
-# 3.2 密码配置
-default_pw=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
+# password
+default_pw=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
 ask "$(msg prompt_pw) [$(msg default_random): $default_pw]: " input_pw
 PASSWORD=${input_pw:-$default_pw}
 
-# 3.3 证书模式选择
+# certificate mode
 echo -e "\n$(msg cert_mode_title)"
 echo -e "  ${CYAN}[1]${NC} $(msg cert_mode_self)"
 echo -e "  ${CYAN}[2]${NC} $(msg cert_mode_acme)"
@@ -247,87 +335,119 @@ ACME_EMAIL=""
 CERT_FILE=""
 KEY_FILE=""
 
-case $mode_choice in
-    2)
-        CERT_TYPE="acme"
-        ask "$(msg prompt_domain): " cert_domain
-        while [ -z "$cert_domain" ]; do
-            ask "${RED}[ERROR]${NC} $(msg err_acme_domain): " cert_domain
-        done
-        CERT_NAME="$cert_domain"
-
-        ask "$(msg prompt_acme_port) [$(msg default) :80]: " input_acme_http
-        ACME_HTTP=${input_acme_http:-:80}
-
-        ask "$(msg prompt_acme_cache) [$(msg default) cert-cache]: " input_acme_cache
-        ACME_CACHE=${input_acme_cache:-cert-cache}
-
-        ask "$(msg prompt_acme_email): " ACME_EMAIL
-        ;;
-    3)
-        CERT_TYPE="custom"
-        ask "$(msg prompt_cert_path): " input_cert_file
-        while [ ! -f "$input_cert_file" ]; do
-            ask "${RED}[$(msg err_file_not_found)]${NC} $(msg prompt_cert_path): " input_cert_file
-        done
-        CERT_FILE="$input_cert_file"
-
-        ask "$(msg prompt_key_path): " input_key_file
-        while [ ! -f "$input_key_file" ]; do
-            ask "${RED}[$(msg err_file_not_found)]${NC} $(msg prompt_key_path): " input_key_file
-        done
-        KEY_FILE="$input_key_file"
-        ;;
-    *)
-        CERT_TYPE="self-signed"
-        ask "$(msg prompt_self_name): " input_cert_name
-        CERT_NAME="$input_cert_name"
-        ;;
+case ${mode_choice:-1} in
+	2)
+		CERT_TYPE="acme"
+		while [ -z "${cert_domain:-}" ]; do
+			ask "$(msg prompt_domain): " cert_domain
+			[ -z "$cert_domain" ] && echo -e "${RED}[ERROR]${NC} $(msg err_acme_domain)"
+		done
+		CERT_NAME="$cert_domain"
+		ask "$(msg prompt_acme_port) [$(msg default) :80]: " input_acme_http
+		ACME_HTTP=${input_acme_http:-:80}
+		ask "$(msg prompt_acme_cache) [$(msg default) cert-cache]: " input_acme_cache
+		ACME_CACHE=${input_acme_cache:-cert-cache}
+		ask "$(msg prompt_acme_email): " ACME_EMAIL
+		;;
+	3)
+		CERT_TYPE="custom"
+		while true; do
+			ask "$(msg prompt_cert_path): " CERT_FILE
+			[ -f "$CERT_FILE" ] && break
+			echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
+		done
+		while true; do
+			ask "$(msg prompt_key_path): " KEY_FILE
+			[ -f "$KEY_FILE" ] && break
+			echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
+		done
+		;;
+	*)
+		CERT_TYPE="self-signed"
+		ask "$(msg prompt_self_name): " CERT_NAME
+		;;
 esac
 
-# 3.4 探测回落配置 (Fallback)
-ask "$(msg prompt_fallback): " input_fallback
-FALLBACK="$input_fallback"
+# fallback
+ask "$(msg prompt_fallback): " FALLBACK
+FALLBACK="${FALLBACK:-}"
 
-# 4. 设置自启动或独立启动
-echo -e "\n${BLUE}[3/4]${NC} $(msg service_config)"
+# web dashboard
+echo -e "\n${PURPLE}━━━ $(msg web_title) ━━━${NC}"
+WEB_ENABLED="false"
+WEB_LISTEN="127.0.0.1:9090"
+WEB_PASSWORD=""
+WEB_TLS_CERT=""
+WEB_TLS_KEY=""
+
+ask "$(msg prompt_web_enable) [$(msg default): n]: " web_choice
+if [[ "${web_choice:-n}" =~ ^[Yy]$ ]]; then
+	WEB_ENABLED="true"
+
+	ask "$(msg prompt_web_listen) [$(msg default) $WEB_LISTEN]: " input_web_listen
+	WEB_LISTEN=${input_web_listen:-$WEB_LISTEN}
+
+	# Generate a random password for dashboard
+	default_web_pw=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
+	ask "$(msg prompt_web_pw) [$(msg default_random): $default_web_pw]: " input_web_pw
+	WEB_PASSWORD=${input_web_pw:-$default_web_pw}
+
+	ask "$(msg prompt_web_tls) [$(msg default): n]: " web_tls_choice
+	if [[ "${web_tls_choice:-n}" =~ ^[Yy]$ ]]; then
+		while true; do
+			ask "$(msg prompt_web_tls_cert): " WEB_TLS_CERT
+			[ -f "$WEB_TLS_CERT" ] && break
+			echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
+		done
+		while true; do
+			ask "$(msg prompt_web_tls_key): " WEB_TLS_KEY
+			[ -f "$WEB_TLS_KEY" ] && break
+			echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
+		done
+	fi
+fi
+
+# --- 4. summary & confirmation ---------------------------------------------
+echo -e "\n${BLUE}[3/5]${NC} ${PURPLE}━━━ $(msg summary_title) ━━━${NC}"
+echo -e "  $(msg summary_port):     ${GREEN}$PORT${NC}"
+echo -e "  $(msg summary_pw):   ${GREEN}$PASSWORD${NC}"
+echo -e "  $(msg summary_cert):     ${GREEN}$CERT_TYPE${NC}"
+[ -n "$CERT_NAME" ]  && echo -e "  Cert Name:       ${CYAN}$CERT_NAME${NC}"
+[ "${FALLBACK:-}" ]  && echo -e "  $(msg summary_fallback):  ${CYAN}$FALLBACK${NC}" || echo -e "  $(msg summary_fallback):  ${YELLOW}(none — HTTP 400)${NC}"
+if [ "$WEB_ENABLED" = "true" ]; then
+	echo -e "  $(msg summary_web):     ${GREEN}$(msg summary_web_enabled)${NC}"
+	echo -e "  $(msg web_url):     ${CYAN}http://$WEB_LISTEN${NC}"
+	echo -e "  $(msg web_pw):     ${YELLOW}$WEB_PASSWORD${NC}"
+	[ -n "$WEB_TLS_CERT" ] && echo -e "  Dashboard TLS:   ${GREEN}Enabled${NC}"
+else
+	echo -e "  $(msg summary_web):     ${YELLOW}$(msg summary_web_disabled)${NC}"
+fi
+echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+ask "$(msg confirm_install) [$(msg default): y]: " confirmed
+if [[ ! "${confirmed:-y}" =~ ^[Yy]$ ]]; then
+	info "$(msg install_cancelled)"
+	exit 0
+fi
+
+# --- 5. install ------------------------------------------------------------
+echo -e "\n${BLUE}[4/5]${NC} $(msg service_config)"
 ask "$(msg prompt_systemd) [$(msg default): y]: " is_systemd
-IS_SYSTEMD_CONFIRM=${is_systemd:-y}
-if [[ "$IS_SYSTEMD_CONFIRM" =~ ^[Yy]$ ]]; then
-    echo -e "$(msg installing_systemd)"
 
-    # 动态拼接所需命令行参数，避免 Systemd 环境变量空值展开错位
-    ARGS="-l 0.0.0.0:$PORT -p $PASSWORD -cert-type $CERT_TYPE"
-    if [ "$CERT_TYPE" = "self-signed" ]; then
-        if [ -n "$CERT_NAME" ]; then
-            ARGS="$ARGS -cert-name $CERT_NAME"
-        fi
-    elif [ "$CERT_TYPE" = "acme" ]; then
-        ARGS="$ARGS -cert-name $CERT_NAME -acme-http $ACME_HTTP -acme-cache $ACME_CACHE"
-        if [ -n "$ACME_EMAIL" ]; then
-            ARGS="$ARGS -acme-email $ACME_EMAIL"
-        fi
-    elif [ "$CERT_TYPE" = "custom" ]; then
-        ARGS="$ARGS -cert-file $CERT_FILE -key-file $KEY_FILE"
-    fi
-    if [ -n "$FALLBACK" ]; then
-        ARGS="$ARGS -fallback $FALLBACK"
-    fi
+ARGS=$(build_args)
 
-    # 创建工作与配置文件夹
-    CONF_DIR="/etc/mist"
-    mkdir -p "$CONF_DIR"
-    
-    # 拷贝二进制
-    install -m 0755 ./mist-server /usr/local/bin/mist-server
+if [[ "${is_systemd:-y}" =~ ^[Yy]$ ]]; then
+	info "$(msg installing_systemd)"
 
-    # 生成环境配置文件
-    cat > "$CONF_DIR/server.conf" <<EOF
+	CONF_DIR="/etc/mist"
+	mkdir -p "$CONF_DIR"
+	install -m 0755 ./mist-server /usr/local/bin/mist-server
+
+	cat > "$CONF_DIR/server.conf" <<EOF
 ARGS="$ARGS"
 EOF
 
-    # 生成 Systemd Service
-    cat > /etc/systemd/system/mist-server.service <<EOF
+	cat > /etc/systemd/system/mist-server.service <<EOF
 [Unit]
 Description=MIST Server Service
 After=network.target
@@ -345,87 +465,41 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    # 载入并启动
-    systemctl daemon-reload
-    systemctl enable mist-server
-    systemctl restart mist-server
+	systemctl daemon-reload
+	systemctl enable mist-server
+	systemctl restart mist-server
 
-    echo -e "${GREEN}[SUCCESS]${NC} $(msg systemd_success)"
-    
-    # 获取服务器公网 IP
-    PUBLIC_IP=$(curl -s https://ipinfo.io/ip || curl -s https://api.ipify.org || echo "PUBLIC_IP")
+	ok "$(msg systemd_success)"
 
-    echo -e "\n${BLUE}[4/4]${NC} $(msg deploy_result)"
-    echo -e "=========================================================="
-    echo -e "  $(msg status):   ${GREEN}$(msg status_active)${NC}"
-    echo -e "  $(msg server_addr): ${CYAN}$PUBLIC_IP${NC}"
-    echo -e "  $(msg server_port):   ${CYAN}$PORT${NC}"
-    echo -e "  $(msg connect_pw):   ${YELLOW}$PASSWORD${NC}"
-    echo -e "  $(msg cert_mode):   ${CYAN}$CERT_TYPE${NC}"
+	# public IP detection
+	PUBLIC_IP=$(curl -s --max-time 5 https://ipinfo.io/ip 2>/dev/null \
+	         || curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
+	         || echo "PUBLIC_IP")
 
-    if [ "$CERT_TYPE" = "self-signed" ]; then
-        echo -e "  $(msg extract_fingerprint)"
-        SHA256=""
-        for i in $(seq 1 10); do
-            SHA256=$(journalctl -u mist-server -n 50 --no-pager | grep -oE "sha256 [0-9a-fA-F]{64}" | awk '{print $2}')
-            if [ -n "$SHA256" ]; then
-                break
-            fi
-            sleep 1
-        done
-        if [ -n "$SHA256" ]; then
-            echo -e "  $(msg cert_fingerprint):   ${GREEN}$SHA256${NC}"
-            echo -e "\n  👉 ${PURPLE}$(msg client_cmd):${NC}"
-            echo -e "  ./mist-client -l 127.0.0.1:1080 -s $PUBLIC_IP:$PORT -p $PASSWORD -tls-cert-sha256 $SHA256"
-        else
-            echo -e "  ${YELLOW}[INFO]${NC} $(msg fingerprint_hint):"
-            echo -e "  journalctl -u mist-server -n 20 --no-pager"
-        fi
-    elif [ "$CERT_TYPE" = "acme" ]; then
-        echo -e "\n  👉 ${PURPLE}$(msg client_cmd):${NC}"
-        echo -e "  ./mist-client -l 127.0.0.1:1080 -s $CERT_NAME:$PORT -p $PASSWORD"
-    else
-        echo -e "  $(msg extract_custom)"
-        SHA256=""
-        for i in $(seq 1 10); do
-            SHA256=$(journalctl -u mist-server -n 50 --no-pager | grep -oE "sha256 [0-9a-fA-F]{64}" | awk '{print $2}')
-            if [ -n "$SHA256" ]; then
-                break
-            fi
-            sleep 1
-        done
-        if [ -n "$SHA256" ]; then
-            echo -e "  $(msg cert_fingerprint):   ${GREEN}$SHA256${NC}"
-        fi
-        echo -e "\n  👉 ${PURPLE}$(msg client_conn_type):${NC}"
-        echo -e "  $(msg client_conn_custom_hint)"
-    fi
-    echo -e "=========================================================="
+	echo -e "\n${BLUE}[5/5]${NC} $(msg deploy_result)"
+	echo -e "=========================================================="
+	echo -e "  $(msg status):   ${GREEN}$(msg status_active)${NC}"
+	echo -e "  $(msg server_addr): ${CYAN}$PUBLIC_IP${NC}"
+	echo -e "  $(msg server_port):   ${CYAN}$PORT${NC}"
+	echo -e "  $(msg connect_pw):   ${YELLOW}$PASSWORD${NC}"
+	echo -e "  $(msg cert_mode):   ${CYAN}$CERT_TYPE${NC}"
+
+		if [ "$WEB_ENABLED" = "true" ]; then
+			echo -e "  $(msg web_url): ${CYAN}http://$WEB_LISTEN${NC}"
+			echo -e "  $(msg web_pw): ${YELLOW}$WEB_PASSWORD${NC}"
+		fi
+	echo -e "  $(msg extract_fingerprint)"
+	SHA256=$(extract_fingerprint)
+	print_client_guide "$SHA256"
+	echo -e "=========================================================="
+
 else
-    # 仅生成前台启动脚本
-    echo -e "$(msg gen_start_sh)"
-    # 动态拼接命令行参数，匹配 systemd 路径的条件逻辑
-    CMD="./mist-server -l \"0.0.0.0:$PORT\" -p \"$PASSWORD\" -cert-type \"$CERT_TYPE\""
-    if [ "$CERT_TYPE" = "self-signed" ]; then
-        if [ -n "$CERT_NAME" ]; then
-            CMD="$CMD -cert-name \"$CERT_NAME\""
-        fi
-    elif [ "$CERT_TYPE" = "acme" ]; then
-        CMD="$CMD -cert-name \"$CERT_NAME\" -acme-http \"$ACME_HTTP\" -acme-cache \"$ACME_CACHE\""
-        if [ -n "$ACME_EMAIL" ]; then
-            CMD="$CMD -acme-email \"$ACME_EMAIL\""
-        fi
-    elif [ "$CERT_TYPE" = "custom" ]; then
-        CMD="$CMD -cert-file \"$CERT_FILE\" -key-file \"$KEY_FILE\""
-    fi
-    if [ -n "$FALLBACK" ]; then
-        CMD="$CMD -fallback \"$FALLBACK\""
-    fi
-    cat > "./start.sh" <<EOF
+	# foreground start script
+	info "$(msg gen_start_sh)"
+	cat > ./start.sh <<EOF
 #!/usr/bin/env bash
-$CMD
+exec ./mist-server $ARGS
 EOF
-    chmod +x ./start.sh
-
-    echo -e "${GREEN}[SUCCESS]${NC} $(msg start_sh_success)"
+	chmod +x ./start.sh
+	ok "$(msg start_sh_success)"
 fi

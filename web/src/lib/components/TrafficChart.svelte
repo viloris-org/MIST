@@ -9,7 +9,6 @@
   let canvas: HTMLCanvasElement;
   let chart: Chart | null = null;
 
-  // Keep last 60 data points (2 min at 2s poll)
   const MAX_POINTS = 60;
   let rxHistory: number[] = [];
   let txHistory: number[] = [];
@@ -59,20 +58,22 @@
           {
             label: 'RX',
             data: [],
-            borderColor: '#58a6ff',
-            backgroundColor: 'rgba(88,166,255,0.1)',
+            borderColor: '#38BDF8',
+            backgroundColor: 'rgba(56,189,248,0.08)',
             fill: true,
-            tension: 0.3,
-            pointRadius: 0
+            tension: 0.4,
+            pointRadius: 0,
+            borderWidth: 1.5,
           },
           {
             label: 'TX',
             data: [],
-            borderColor: '#3fb950',
-            backgroundColor: 'rgba(63,185,80,0.1)',
+            borderColor: '#22C55E',
+            backgroundColor: 'rgba(34,197,94,0.08)',
             fill: true,
-            tension: 0.3,
-            pointRadius: 0
+            tension: 0.4,
+            pointRadius: 0,
+            borderWidth: 1.5,
           }
         ]
       },
@@ -80,25 +81,44 @@
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 0 },
+        interaction: {
+          intersect: false,
+          mode: 'index',
+        },
         scales: {
           x: {
             display: true,
-            ticks: { color: '#8b949e', maxTicksLimit: 6 },
-            grid: { color: '#30363d33' }
+            ticks: { color: '#64748B', maxTicksLimit: 6, font: { size: 10 } },
+            grid: { color: '#1E293B' }
           },
           y: {
             display: true,
             ticks: {
-              color: '#8b949e',
+              color: '#64748B',
+              font: { size: 10 },
               callback: (v) => fmtBytes(Number(v)) + '/s'
             },
-            grid: { color: '#30363d33' },
+            grid: { color: '#1E293B' },
             beginAtZero: true
           }
         },
         plugins: {
           legend: {
-            labels: { color: '#8b949e', usePointStyle: true }
+            labels: {
+              color: '#94A3B8',
+              usePointStyle: true,
+              pointStyleWidth: 8,
+              font: { size: 11 },
+              padding: 16,
+            }
+          },
+          tooltip: {
+            backgroundColor: '#0F172A',
+            borderColor: '#334155',
+            borderWidth: 1,
+            titleColor: '#F8FAFC',
+            bodyColor: '#94A3B8',
+            padding: 10,
           }
         }
       }
@@ -113,9 +133,9 @@
   }
 </script>
 
-<div class="card">
-  <h3 class="text-xs font-medium text-dim uppercase tracking-wider mb-3">{$tr('dashboard.traffic')}</h3>
-  <div class="h-48">
+<div class="card-elevated">
+  <h3 class="text-xs font-medium text-dim uppercase tracking-wider mb-4">{$tr('dashboard.traffic')}</h3>
+  <div class="h-52">
     <canvas bind:this={canvas}></canvas>
   </div>
 </div>

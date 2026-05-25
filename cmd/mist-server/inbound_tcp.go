@@ -68,6 +68,9 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 	}
 	_ = c.SetReadDeadline(time.Time{})
 
+	s.SessionAccepted()
+	defer s.SessionClosed()
+
 	session := session.NewServerSession(c, func(stream *session.Stream) {
 		defer func() {
 			if r := recover(); r != nil {

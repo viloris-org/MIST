@@ -15,7 +15,7 @@
   });
 </script>
 
-<div class="space-y-6">
+<div class="space-y-6 animate-fade-in">
   <!-- Session stats grid -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
     <StatCard
@@ -42,13 +42,15 @@
 
   <!-- Server info bar -->
   <div class="card-sm flex flex-wrap items-center justify-between gap-3 text-sm">
-    <div class="flex items-center gap-4">
-      <span class="text-dim">{$tr('dashboard.server')}</span>
-      <span class="font-mono text-sm">{$status?.server ?? '--'}</span>
-    </div>
-    <div class="flex items-center gap-4">
-      <span class="text-dim">{$tr('dashboard.version')}</span>
-      <span class="font-mono text-sm">mist/{$status?.version ?? '--'}</span>
+    <div class="flex items-center gap-6">
+      <div class="flex items-center gap-2">
+        <span class="text-dim text-xs uppercase tracking-wider">{$tr('dashboard.server')}</span>
+        <span class="font-mono text-sm text-text">{$status?.server ?? '--'}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-dim text-xs uppercase tracking-wider">{$tr('dashboard.version')}</span>
+        <span class="font-mono text-sm text-text">mist/{$status?.version ?? '--'}</span>
+      </div>
     </div>
     {#if $status?.last_error}
       <div class="text-red text-sm w-full">{$status.last_error}</div>

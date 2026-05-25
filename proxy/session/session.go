@@ -53,10 +53,11 @@ type Session struct {
 
 	// pool
 	seq       uint64
+	createdAt time.Time
 	idleSince time.Time
 	idleUntil time.Time
+	idleMu    sync.Mutex
 	padding   *atomic.TypedValue[*padding.PaddingFactory]
-
 	peerVersion byte
 
 	// client
@@ -97,12 +98,43 @@ type Session struct {
 	synRateLimit   int
 }
 
+// SessionInfo exposes read-only session metadata for the dashboard.
+type SessionInfo struct {
+	Seq         uint64 `json:"seq"`
+	StreamCount int    `json:"stream_count"`
+	PacketCount uint32 `json:"packet_count"`
+	AgeMs       int64  `json:"age_ms"`
+	IsIdle      bool   `json:"is_idle"`
+	IsClosed    bool   `json:"is_closed"`
+}
+
+// Info returns a read-only snapshot of session metadata.
+func (s *Session) Info() SessionInfo {
+	s.streamLock.RLock()
+	streamCount := len(s.streams)
+	s.streamLock.RUnlock()
+
+	s.idleMu.Lock()
+	isIdle := !s.idleUntil.IsZero() && time.Now().Before(s.idleUntil)
+	s.idleMu.Unlock()
+
+	return SessionInfo{
+		Seq:         s.seq,
+		StreamCount: streamCount,
+		PacketCount: s.pktCounter.Load(),
+		AgeMs:       time.Since(s.createdAt).Milliseconds(),
+		IsIdle:      isIdle,
+		IsClosed:    s.IsClosed(),
+	}
+}
+
 func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
 	s := &Session{
 		conn:              conn,
 		isClient:          true,
 		sendPadding:       true,
 		padding:           _padding,
+		createdAt:         time.Now(),
 		writeBuffer:       make([]byte, headerOverHeadSize+maxFramePayloadLen),
 		maxStreams:        maxStreams,
 		readTimeout:       readTimeout,
@@ -121,6 +153,7 @@ func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding 
 		conn:              conn,
 		onNewStream:       onNewStream,
 		padding:           _padding,
+		createdAt:         time.Now(),
 		writeBuffer:       make([]byte, headerOverHeadSize+maxFramePayloadLen),
 		maxStreams:        maxStreams,
 		readTimeout:       readTimeout,

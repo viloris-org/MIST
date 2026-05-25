@@ -25,6 +25,12 @@ type StatusProvider interface {
 	StatusJSON() ([]byte, error)
 }
 
+// ConfigProvider provides configuration data for the settings page.
+// If a StatusProvider also implements ConfigProvider, the settings API is enabled.
+type ConfigProvider interface {
+	ConfigJSON() ([]byte, error)
+}
+
 // Dashboard serves an embedded web UI with a REST API.
 type Dashboard struct {
 	addr     string
@@ -37,20 +43,37 @@ type Dashboard struct {
 	tokenDur     time.Duration
 	tlsCertFile  string
 	tlsKeyFile   string
+
+	hub        *WSHub
+	logBuffer  *LogBuffer
+	logHook    *LogrusHook
+	stopTicker   chan struct{}
+	stopCleanup  chan struct{}
+	stopOnce     sync.Once
+	cleanupOnce  sync.Once
 }
 
 // New creates a new dashboard server.
 func New(addr string, provider StatusProvider, opts ...Option) *Dashboard {
+	hub := NewWSHub()
+	logBuf := NewLogBuffer(hub)
 	d := &Dashboard{
-		addr:     addr,
-		provider: provider,
-		tokenDur: 24 * time.Hour,
-		tokens:   make(map[string]time.Time),
+		addr:        addr,
+		provider:    provider,
+		tokenDur:    24 * time.Hour,
+		tokens:      make(map[string]time.Time),
+		hub:         hub,
+		logBuffer:   logBuf,
+		logHook:     NewLogrusHook(logBuf),
+		stopTicker:  make(chan struct{}),
+		stopCleanup: make(chan struct{}),
 	}
 
 	for _, o := range opts {
 		o(d)
 	}
+
+	logrus.AddHook(d.logHook)
 	return d
 }
 
@@ -110,9 +133,15 @@ func (d *Dashboard) Start() error {
 	// Protected endpoints (require auth).
 	mux.Handle("/api/status", d.authMiddleware(d.handleStatus))
 	mux.Handle("/api/logout", d.authMiddleware(d.handleLogout))
+	mux.Handle("/api/logs", d.authMiddleware(d.handleLogs))
+	mux.Handle("/api/ws", d.authMiddleware(d.handleWS))
+	mux.Handle("/api/config", d.authMiddleware(d.handleConfig))
 
 	// Cleanup expired tokens periodically.
 	go d.cleanupTokens()
+
+	// Push status via WebSocket every 2 seconds.
+	go d.statusTicker()
 
 	d.server = &http.Server{
 		Addr:    d.addr,
@@ -141,6 +170,14 @@ func (d *Dashboard) Start() error {
 
 // Stop shuts down the dashboard.
 func (d *Dashboard) Stop() error {
+	d.stopOnce.Do(func() {
+		close(d.stopTicker)
+	})
+	d.cleanupOnce.Do(func() {
+		close(d.stopCleanup)
+	})
+	// Mark hook inactive so it stops producing entries for a closed hub.
+	d.logHook.stopped.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return d.server.Shutdown(ctx)
@@ -268,7 +305,7 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -298,14 +335,12 @@ func (d *Dashboard) authMiddleware(next http.HandlerFunc) http.Handler {
 
 func extractToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return ""
+	if auth != "" {
+		if token, ok := strings.CutPrefix(auth, "Bearer "); ok {
+			return token
+		}
 	}
-	token, ok := strings.CutPrefix(auth, "Bearer ")
-	if !ok {
-		return ""
-	}
-	return token
+	return r.URL.Query().Get("token")
 }
 
 func (d *Dashboard) validateToken(token string) bool {
@@ -330,15 +365,20 @@ func (d *Dashboard) validateToken(token string) bool {
 func (d *Dashboard) cleanupTokens() {
 	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		d.tokensMu.Lock()
-		now := time.Now()
-		for k, exp := range d.tokens {
-			if now.After(exp) {
-				delete(d.tokens, k)
+	for {
+		select {
+		case <-ticker.C:
+			d.tokensMu.Lock()
+			now := time.Now()
+			for k, exp := range d.tokens {
+				if now.After(exp) {
+					delete(d.tokens, k)
+				}
 			}
+			d.tokensMu.Unlock()
+		case <-d.stopCleanup:
+			return
 		}
-		d.tokensMu.Unlock()
 	}
 }
 
@@ -358,5 +398,82 @@ func (d *Dashboard) handleStatus(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Also push via WebSocket.
+	d.hub.BroadcastStatus(data)
+
 	w.Write(data)
+}
+
+func (d *Dashboard) handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet && r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	cp, ok := d.provider.(ConfigProvider)
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "config not available"})
+		return
+	}
+
+	if r.Method == http.MethodPut {
+		w.WriteHeader(http.StatusNotImplemented)
+		json.NewEncoder(w).Encode(map[string]string{"error": "config updates not yet supported"})
+		return
+	}
+
+	data, err := cp.ConfigJSON()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	w.Write(data)
+}
+
+func (d *Dashboard) handleWS(w http.ResponseWriter, r *http.Request) {
+	d.hub.ServeHTTP(w, r)
+}
+
+func (d *Dashboard) handleLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	entries := d.logBuffer.Snapshot()
+	if entries == nil {
+		entries = []LogEntry{}
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"entries": entries,
+		"count":   len(entries),
+	})
+}
+
+func (d *Dashboard) statusTicker() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if d.provider != nil {
+				if data, err := d.provider.StatusJSON(); err == nil {
+					d.hub.BroadcastStatus(data)
+				}
+			}
+		case <-d.stopTicker:
+			return
+		}
+	}
 }

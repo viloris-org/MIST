@@ -137,8 +137,10 @@ func (c *Client) CreateStream(ctx context.Context) (net.Conn, error) {
 				go session.Close()
 			default:
 				c.idleSessionLock.Lock()
+				session.idleMu.Lock()
 				session.idleSince = time.Now()
 				session.idleUntil = session.idleSince.Add(jitterDuration(c.idleSessionTimeout, sessionPoolJitterPercent))
+				session.idleMu.Unlock()
 				c.idleSession.Insert(math.MaxUint64-session.seq, session)
 				c.idleSessionLock.Unlock()
 			}
@@ -156,6 +158,11 @@ func (c *Client) getIdleSession() (idle *Session) {
 	c.idleSessionLock.Lock()
 	idle = c.idleSession.PopFirst()
 	c.idleSessionLock.Unlock()
+	if idle != nil {
+		idle.idleMu.Lock()
+		idle.idleUntil = time.Time{}
+		idle.idleMu.Unlock()
+	}
 	return
 }
 
@@ -205,6 +212,22 @@ func (c *Client) Close() error {
 	}
 
 	return nil
+}
+
+// Sessions returns metadata for all active sessions.
+func (c *Client) Sessions() []SessionInfo {
+	c.sessionsLock.Lock()
+	sessions := make([]*Session, 0, len(c.sessions))
+	for _, s := range c.sessions {
+		sessions = append(sessions, s)
+	}
+	c.sessionsLock.Unlock()
+
+	infos := make([]SessionInfo, 0, len(sessions))
+	for _, s := range sessions {
+		infos = append(infos, s.Info())
+	}
+	return infos
 }
 
 func (c *Client) Stats() ClientStats {
@@ -276,18 +299,23 @@ func (c *Client) idleCleanupExpTime(expTime time.Time) {
 			logrus.Debugln("check session:", session.seq, expTime, session.idleSince, session.idleUntil)
 		}
 
+		session.idleMu.Lock()
 		if session.idleUntil.IsZero() {
 			session.idleUntil = session.idleSince.Add(jitterDuration(c.idleSessionTimeout, sessionPoolJitterPercent))
 		}
-		if session.idleUntil.After(expTime) {
+		keepAlive := session.idleUntil.After(expTime)
+		session.idleMu.Unlock()
+		if keepAlive {
 			activeCount++
 			activeItems = append(activeItems, item)
 			continue
 		}
 
 		if activeCount < c.minIdleSession {
+			session.idleMu.Lock()
 			session.idleSince = time.Now()
 			session.idleUntil = session.idleSince.Add(jitterDuration(c.idleSessionTimeout, sessionPoolJitterPercent))
+			session.idleMu.Unlock()
 			activeCount++
 			activeItems = append(activeItems, item)
 			continue

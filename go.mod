@@ -12,6 +12,7 @@ require (
 
 require (
 	github.com/google/btree v1.1.2 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect

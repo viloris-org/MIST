@@ -3,7 +3,8 @@ export default {
 	nav: {
 		dashboard: 'Dashboard',
 		sessions: 'Sessions',
-		logs: 'Logs'
+		logs: 'Logs',
+		settings: 'Settings'
 	},
 	login: {
 		title: 'MIST',
@@ -51,12 +52,24 @@ export default {
 		cumulative: 'Cumulative',
 		connections: 'Connections',
 		activeConnections: 'Active Connections',
-		acceptedCumulative: 'Accepted (cumulative)'
+		acceptedCumulative: 'Accepted (cumulative)',
+		detail: 'Session Details',
+		seq: '#',
+		age: 'Age',
+		streams: 'Streams',
+		packets: 'Packets',
+		state: 'State',
+		running: 'active',
+		idling: 'idle',
+		noSessions: 'No active sessions.'
 	},
 	logs: {
 		title: 'Logs',
 		serverError: 'Server Error',
 		noErrors: 'No errors reported.',
+		liveLogs: 'Live Logs',
+		lines: 'lines',
+		noEntries: 'No log entries yet.',
 		connectionInfo: 'Connection Info',
 		serverAddress: 'Server Address',
 		version: 'Version',
@@ -64,6 +77,25 @@ export default {
 		lastUpdated: 'Last Updated',
 		commit: 'Commit',
 		buildDate: 'Build Date'
+	},
+	settings: {
+		title: 'Settings',
+		general: 'General',
+		appearance: 'Appearance',
+		connection: 'Connection',
+		server: 'Server',
+		listenAddr: 'Listen Address',
+		inbound: 'Inbound Types',
+		redirectListen: 'Redirect Listen',
+		minIdleSession: 'Min Idle Sessions',
+		tlsMinVersion: 'TLS Min Version',
+		insecure: 'Insecure TLS',
+		address: 'Address',
+		webDashboard: 'Web Dashboard',
+		password: 'Password',
+		notSet: 'not set',
+		language: 'Language',
+		configHint: 'These settings come from CLI flags or the TOML config file. To change them, edit your config and restart the client.'
 	},
 	common: {
 		logout: 'Logout',
