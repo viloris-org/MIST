@@ -174,7 +174,7 @@ func (c *Client) createSession(ctx context.Context) (*Session, error) {
 		return nil, err
 	}
 
-	session := NewClientSession(underlying, &padding.DefaultPaddingFactory, c.maxStreams, c.streamBufferSize, c.readTimeout, c.keepaliveInterval, c.synRateLimit, c.passwordHash)
+	session := NewClientSession(underlying, c.padding, c.maxStreams, c.streamBufferSize, c.readTimeout, c.keepaliveInterval, c.synRateLimit, c.passwordHash)
 	session.seq = c.sessionCounter.Add(1)
 	session.dieHook = func() {
 		if clientDebugSessionPool {

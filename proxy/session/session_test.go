@@ -79,3 +79,33 @@ func TestWriteControlFrameRejectsOversizedPayload(t *testing.T) {
 		t.Fatal("expected oversized control frame error")
 	}
 }
+
+func TestAppendPostPaddingWasteKeepsObfsWireOrder(t *testing.T) {
+	conn := &recordingConn{}
+	s := NewClientSession(conn, &padding.DefaultPaddingFactory, 0, 0, 0, 0, 0, nil)
+	s.sendPadding = false
+	s.hmacMode = true
+	s.setHMACKey([]byte("0123456789abcdef0123456789abcdef"))
+	s.wasteAfterCountdown = 0
+
+	bufPtr := s.buildFrame(cmdPSH, 7, []byte("payload"))
+	defer s.frameBufPool.Put(bufPtr)
+
+	out := s.appendPostPaddingWaste((*bufPtr)[:])
+	if len(out) <= len(*bufPtr) {
+		t.Fatal("expected waste frame to be appended")
+	}
+
+	first := rawHeader(out[:headerOverHeadSize])
+	xorHeader(first[:], s.obfsKey, 1)
+	if first.Cmd() != cmdPSH || first.StreamID() != 7 {
+		t.Fatalf("unexpected first frame after deobfs: cmd=%d sid=%d", first.Cmd(), first.StreamID())
+	}
+
+	secondOffset := len(*bufPtr)
+	second := rawHeader(out[secondOffset : secondOffset+headerOverHeadSize])
+	xorHeader(second[:], s.obfsKey, 2)
+	if second.Cmd() != cmdWaste || second.StreamID() != 0 {
+		t.Fatalf("unexpected second frame after deobfs: cmd=%d sid=%d", second.Cmd(), second.StreamID())
+	}
+}

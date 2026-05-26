@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mist/util"
 	"net"
 	"strings"
 	"time"
@@ -20,19 +21,19 @@ type Options struct {
 	Password   string
 
 	// TLS
-	SNI            string // override ServerName in TLS ClientHello
-	TLSCertSHA256  string // hex-encoded SHA-256 of server cert DER for pinning
-	Insecure       bool   // skip all TLS verification
-	TLSMinVersion  uint16 // 0 means tls.VersionTLS12
-	KeyLogWriter   io.Writer // optional TLS key log writer
+	SNI           string    // override ServerName in TLS ClientHello
+	TLSCertSHA256 string    // hex-encoded SHA-256 of server cert DER for pinning
+	Insecure      bool      // skip all TLS verification
+	TLSMinVersion uint16    // 0 means tls.VersionTLS12
+	KeyLogWriter  io.Writer // optional TLS key log writer
 
 	// Session pool
-	MinIdleSession     int
-	MaxStreams         int
-	StreamBufferSize   int // 0 means use default (16)
-	ReadTimeout        time.Duration
-	KeepaliveInterval  time.Duration
-	SynRateLimit       int
+	MinIdleSession    int
+	MaxStreams        int
+	StreamBufferSize  int // 0 means use default (16)
+	ReadTimeout       time.Duration
+	KeepaliveInterval time.Duration
+	SynRateLimit      int
 
 	// Logger, defaults to silent if nil
 	Logger Logger
@@ -89,6 +90,8 @@ func (o *Options) TLSConfig() (*tls.Config, error) {
 		MinVersion:         o.TLSMinVersion,
 		ClientSessionCache: tls.NewLRUClientSessionCache(64),
 		KeyLogWriter:       o.KeyLogWriter,
+		CurvePreferences:   util.RandomizedCurvePreferences(),
+		NextProtos:         util.RandomizedALPN(),
 	}
 
 	if o.TLSCertSHA256 != "" {

@@ -19,7 +19,10 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 )
 
-var passwordSha256 []byte
+var (
+	passwordSha256              []byte
+	serverPaddingSchemeExplicit bool
+)
 
 func main() {
 	listen := flag.String("l", "0.0.0.0:8443", "server listen port")
@@ -52,6 +55,7 @@ func main() {
 			}
 			if padding.UpdatePaddingScheme(b) {
 				logrus.Infoln("loaded padding scheme file:", *paddingScheme)
+				serverPaddingSchemeExplicit = true
 			} else {
 				logrus.Errorln("wrong format padding scheme file:", *paddingScheme)
 			}
@@ -138,7 +142,6 @@ func newSelfSignedTLSConfig(certName, listen string, requireIP bool, tlsMinVersi
 		logrus.Infof("[Server] TLS self-signed cert %s sha256 %x", generatedCertName, certSum)
 	}
 	config := baseTLSConfig(tlsMinVersion)
-	config.CurvePreferences = []tls.CurveID{tls.X25519}
 	config.GetCertificate = func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		return tlsCert, nil
 	}
@@ -147,7 +150,8 @@ func newSelfSignedTLSConfig(certName, listen string, requireIP bool, tlsMinVersi
 
 func baseTLSConfig(tlsMinVersion uint16) *tls.Config {
 	config := &tls.Config{
-		MinVersion: tlsMinVersion,
+		MinVersion:       tlsMinVersion,
+		CurvePreferences: util.RandomizedCurvePreferences(),
 	}
 	if tlsMinVersion == tls.VersionTLS12 {
 		config.CipherSuites = []uint16{
@@ -174,7 +178,6 @@ func newCustomTLSConfig(certFile, keyFile string, tlsMinVersion uint16) (*tls.Co
 		logrus.Infof("[Server] TLS custom cert sha256 %x", certSum)
 	}
 	config := baseTLSConfig(tlsMinVersion)
-	config.CurvePreferences = []tls.CurveID{tls.X25519}
 	config.GetCertificate = func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		return &tlsCert, nil
 	}
@@ -214,7 +217,6 @@ func newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail string, tlsMinVer
 	logrus.Infof("[Server] TLS ACME domain cert %s cache %s http-01 %s", domain, acmeCache, acmeHTTP)
 	tlsConfig := manager.TLSConfig()
 	tlsConfig.MinVersion = tlsMinVersion
-	tlsConfig.CurvePreferences = []tls.CurveID{tls.X25519}
 	if tlsMinVersion == tls.VersionTLS12 {
 		tlsConfig.CipherSuites = []uint16{
 			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,

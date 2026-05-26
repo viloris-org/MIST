@@ -3,8 +3,10 @@ package mistclient
 import (
 	"context"
 	"crypto/tls"
-	"encoding/binary"
+	"encoding/base64"
+	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"mist/proxy"
@@ -115,15 +117,18 @@ func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {
 	b := buf.NewPacket()
 	defer b.Release()
 
-	b.Write(c.passwordHash)
-	var paddingLen int
-	if pad, err := padding.DefaultPaddingFactory.Load().GenerateRecordPayloadSizes(0); err == nil && len(pad) > 0 {
-		paddingLen = pad[0]
-	}
-	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))
-	if paddingLen > 0 {
-		b.WriteZeroN(paddingLen)
-	}
+	// Embed the auth hash in a fake HTTP request so the handshake looks
+	// like normal web traffic to DPI.
+	b.WriteString("GET / HTTP/1.1\r\n")
+	fmt.Fprintf(b, "Host: %s\r\n", c.httpHost())
+	fmt.Fprintf(b, "Authorization: Bearer %s\r\n", base64.RawURLEncoding.EncodeToString(c.passwordHash))
+	b.WriteString("User-Agent: Mozilla/5.0\r\n")
+	b.WriteString("Accept: */*\r\n")
+	b.WriteString("\r\n")
+
+	// Random HTTP body as preamble padding.
+	bodyLen, _ := padding.RandomInt(101) // [0, 100]
+	b.WriteRandom(bodyLen + 30)          // [30, 130]
 
 	if _, err := b.WriteTo(tlsConn); err != nil {
 		tlsConn.Close()
@@ -131,6 +136,17 @@ func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {
 	}
 
 	return tlsConn, nil
+}
+
+func (c *Client) httpHost() string {
+	if host := strings.TrimSpace(c.tlsConfig.ServerName); host != "" {
+		return host
+	}
+	host, _, err := net.SplitHostPort(c.opts.ServerAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	return c.opts.ServerAddr
 }
 
 // NewConnection implements the MistCore TCPConnectionHandler interface for

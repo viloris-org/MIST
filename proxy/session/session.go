@@ -108,6 +108,15 @@ type Session struct {
 	authHash         []byte
 	pendingPing      bool
 
+	// header obfuscation (P0 anti-fingerprinting)
+	obfsKey       []byte
+	obfsSendCount atomic.Uint64
+	obfsRecvCount atomic.Uint64
+
+	// post-padding periodic waste
+	wasteAfterEnabled   bool
+	wasteAfterCountdown int32
+
 	// SYN rate limit
 	synCount       int
 	synWindowStart time.Time
@@ -146,18 +155,20 @@ func (s *Session) Info() SessionInfo {
 
 func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, streamBufferSize int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
 	s := &Session{
-		conn:              conn,
-		isClient:          true,
-		sendPadding:       true,
-		padding:           _padding,
-		createdAt:         time.Now(),
-		maxStreams:        maxStreams,
-		streamBufferSize:  streamBufferSize,
-		readTimeout:       readTimeout,
-		keepaliveInterval: keepaliveInterval,
-		synRateLimit:      synRateLimit,
-		passwordHash:      passwordHash,
-		settingsReceived:  make(chan struct{}),
+		conn:                conn,
+		isClient:            true,
+		sendPadding:         true,
+		wasteAfterEnabled:   true,
+		wasteAfterCountdown: 5,
+		padding:             _padding,
+		createdAt:           time.Now(),
+		maxStreams:          maxStreams,
+		streamBufferSize:    streamBufferSize,
+		readTimeout:         readTimeout,
+		keepaliveInterval:   keepaliveInterval,
+		synRateLimit:        synRateLimit,
+		passwordHash:        passwordHash,
+		settingsReceived:    make(chan struct{}),
 	}
 	s.frameBufPool = sync.Pool{
 		New: func() any {
@@ -172,17 +183,19 @@ func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.Paddin
 
 func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, streamBufferSize int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
 	s := &Session{
-		conn:              conn,
-		onNewStream:       onNewStream,
-		padding:           _padding,
-		createdAt:         time.Now(),
-		maxStreams:        maxStreams,
-		streamBufferSize:  streamBufferSize,
-		readTimeout:       readTimeout,
-		keepaliveInterval: keepaliveInterval,
-		synRateLimit:      synRateLimit,
-		passwordHash:      passwordHash,
-		authComplete:      make(chan struct{}),
+		conn:                conn,
+		onNewStream:         onNewStream,
+		wasteAfterEnabled:   true,
+		wasteAfterCountdown: 5,
+		padding:             _padding,
+		createdAt:           time.Now(),
+		maxStreams:          maxStreams,
+		streamBufferSize:    streamBufferSize,
+		readTimeout:         readTimeout,
+		keepaliveInterval:   keepaliveInterval,
+		synRateLimit:        synRateLimit,
+		passwordHash:        passwordHash,
+		authComplete:        make(chan struct{}),
 	}
 	s.frameBufPool = sync.Pool{
 		New: func() any {
@@ -336,6 +349,10 @@ func (s *Session) recvLoop() error {
 		}
 		if _, err := io.ReadFull(s.conn, hdr[:]); err == nil {
 			s.lastRecv = now()
+			if s.hmacMode {
+				ctr := s.obfsRecvCount.Add(1)
+				xorHeader(hdr[:], s.obfsKey, ctr)
+			}
 			sid := hdr.StreamID()
 			switch hdr.Cmd() {
 			case cmdPSH:
@@ -814,15 +831,17 @@ func (s *Session) buildFrame(cmd byte, sid uint32, data []byte) *[]byte {
 	buf := *bufPtr
 	if cap(buf) < frameLen {
 		buf = make([]byte, frameLen)
-		*bufPtr = buf
 	}
 	frame := buf[:frameLen]
+	*bufPtr = frame
 	frame[0] = cmd
 	binary.BigEndian.PutUint32(frame[1:5], sid)
 	binary.BigEndian.PutUint16(frame[5:7], uint16(len(data)+trailerLen))
 	copy(frame[headerOverHeadSize:], data)
 	if hmacNeeded {
 		s.appendFrameHMAC(frame[headerOverHeadSize+len(data):], cmd, sid, data)
+		ctr := s.obfsSendCount.Add(1)
+		xorHeader(frame[:headerOverHeadSize], s.obfsKey, ctr)
 	}
 	return bufPtr
 }
@@ -850,6 +869,8 @@ func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
 	copy(frame[headerOverHeadSize:], data)
 	if hmacNeeded {
 		s.appendFrameHMAC(frame[headerOverHeadSize+len(data):], cmd, sid, data)
+		ctr := s.obfsSendCount.Add(1)
+		xorHeader(frame[:headerOverHeadSize], s.obfsKey, ctr)
 	}
 
 	n, err := s.writeConnLocked(frame)
@@ -944,12 +965,12 @@ func (s *Session) writeConnLocked(b []byte) (n int, err error) {
 					paddingLen := l - remainPayloadLen - headerOverHeadSize
 					out = append(out, payload...)
 					if paddingLen > 0 {
-						out = appendWasteFrame(out, paddingLen)
+						out = s.appendWasteFrame(out, paddingLen)
 					}
 					n += remainPayloadLen
 					payload = nil
 				} else { // this packet is all padding
-					out = appendWasteFrame(out, l)
+					out = s.appendWasteFrame(out, l)
 					payload = nil
 				}
 			}
@@ -965,17 +986,53 @@ func (s *Session) writeConnLocked(b []byte) (n int, err error) {
 		}
 	}
 
+	b = s.appendPostPaddingWaste(b)
 	return s.conn.Write(b)
 }
 
-func appendWasteFrame(dst []byte, paddingLen int) []byte {
+func (s *Session) appendPostPaddingWaste(dst []byte) []byte {
+	if !s.wasteAfterEnabled {
+		return dst
+	}
+	if s.wasteAfterCountdown > 0 {
+		s.wasteAfterCountdown--
+		return dst
+	}
+	wasteLen, err := padding.RandomInt(471) // [0, 470]
+	if err != nil {
+		return dst
+	}
+	wasteLen += 30 // [30, 500]
+	dst = s.appendWasteFrame(dst, wasteLen)
+	// Next waste in 3-20 packets.
+	n, err := padding.RandomInt(18) // [0, 17]
+	if err != nil {
+		s.wasteAfterCountdown = 10
+	} else {
+		s.wasteAfterCountdown = int32(n) + 3
+	}
+	return dst
+}
+
+func (s *Session) appendWasteFrame(dst []byte, paddingLen int) []byte {
 	frameLen := headerOverHeadSize + paddingLen
 	off := len(dst)
-	dst = dst[:off+frameLen]
+	if cap(dst) < off+frameLen {
+		grown := make([]byte, off+frameLen)
+		copy(grown, dst)
+		dst = grown
+	} else {
+		dst = dst[:off+frameLen]
+	}
 	frame := dst[off:]
 	frame[0] = cmdWaste
 	binary.BigEndian.PutUint32(frame[1:5], 0)
 	binary.BigEndian.PutUint16(frame[5:7], uint16(paddingLen))
+	padding.FillRandom(frame[headerOverHeadSize:])
+	if s.hmacMode {
+		ctr := s.obfsSendCount.Add(1)
+		xorHeader(frame[:headerOverHeadSize], s.obfsKey, ctr)
+	}
 	return dst
 }
 
@@ -983,6 +1040,7 @@ func (s *Session) setHMACKey(key []byte) {
 	s.hmacKey = key
 	if len(key) == 0 {
 		s.hmacPool = sync.Pool{}
+		s.obfsKey = nil
 		return
 	}
 	poolKey := append([]byte(nil), key...)
@@ -991,6 +1049,7 @@ func (s *Session) setHMACKey(key []byte) {
 			return hmac.New(sha256.New, poolKey)
 		},
 	}
+	s.obfsKey = deriveObfsKey(key)
 }
 
 func deriveHMACKey(passwordHash, nonce []byte) []byte {

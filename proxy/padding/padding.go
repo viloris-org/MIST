@@ -47,15 +47,14 @@ const (
 	maxRulesPerRecord    = 64
 )
 
-var defaultPaddingScheme = []byte(`stop=8
-0=30-30
-1=100-400
-2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000
-3=9-9,500-1000
-4=500-1000
-5=500-1000
-6=500-1000
-7=500-1000`)
+var defaultPaddingScheme = func() []byte {
+	scheme, err := GenerateRandomScheme()
+	if err != nil {
+		// Fallback to a fixed scheme; should never happen.
+		return []byte("stop=8\n0=30-30\n1=100-400\n2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000\n3=9-9,500-1000\n4=500-1000\n5=500-1000\n6=500-1000\n7=500-1000")
+	}
+	return scheme
+}()
 
 type PaddingFactory struct {
 	RawScheme          []byte
@@ -184,4 +183,99 @@ func randomInt(maxExclusive int) (int, error) {
 			return int(value % span), nil
 		}
 	}
+}
+
+// RandomInt returns a random integer in [0, maxExclusive). It is safe for
+// concurrent use and suitable for infrequent calls outside the hot path.
+func RandomInt(maxExclusive int) (int, error) {
+	return randomInt(maxExclusive)
+}
+
+// FillRandom fills buf with random bytes from crypto/rand. It is safe for
+// concurrent use and suitable for infrequent calls.
+func FillRandom(buf []byte) error {
+	_, err := io.ReadFull(rand.Reader, buf)
+	return err
+}
+
+// GenerateRandomScheme creates a randomized padding scheme with stop between
+// 50 and 200. Packet 0 is kept at 30-30 for preamble compatibility. Remaining
+// packets get randomized rules: some carry checkmarks for real data, others
+// are pure waste. Waste sizes vary between 30 and 2000 bytes.
+func GenerateRandomScheme() ([]byte, error) {
+	stop, err := randomInt(151) // [0, 150]
+	if err != nil {
+		return nil, err
+	}
+	stop += 50 // [50, 200]
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "stop=%d\n", stop)
+	sb.WriteString("0=30-30\n")
+
+	for pkt := 1; pkt < stop; pkt++ {
+		fmt.Fprintf(&sb, "%d=", pkt)
+
+		kind, err := randomInt(10)
+		if err != nil {
+			return nil, err
+		}
+
+		switch {
+		case kind < 2: // 20%: checkmark only (data passthrough)
+			sb.WriteString("c")
+		case kind < 5: // 30%: waste + checkmark + waste
+			w1, err := randomWasteSize()
+			if err != nil {
+				return nil, err
+			}
+			w2, err := randomWasteSize()
+			if err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(&sb, "%d-%d,c,%d-%d", w1, w1, w2, w2)
+		default: // 50%: pure waste, sometimes with a checkmark
+			if kind < 6 {
+				// single waste chunk
+				w, err := randomWasteSize()
+				if err != nil {
+					return nil, err
+				}
+				fmt.Fprintf(&sb, "%d-%d", w, w)
+			} else if kind < 8 {
+				// two waste chunks
+				w1, err := randomWasteSize()
+				if err != nil {
+					return nil, err
+				}
+				w2, err := randomWasteSize()
+				if err != nil {
+					return nil, err
+				}
+				fmt.Fprintf(&sb, "%d-%d,%d-%d", w1, w1, w2, w2)
+			} else {
+				// waste + occasional checkmark for data passthrough
+				w1, err := randomWasteSize()
+				if err != nil {
+					return nil, err
+				}
+				w2, err := randomWasteSize()
+				if err != nil {
+					return nil, err
+				}
+				fmt.Fprintf(&sb, "%d-%d,c,%d-%d", w1, w1, w2, w2)
+			}
+		}
+		sb.WriteByte('\n')
+	}
+
+	return []byte(sb.String()), nil
+}
+
+func randomWasteSize() (int, error) {
+	n, err := randomInt(1971) // [0, 1970]
+	if err != nil {
+		return 0, err
+	}
+	return n + 30, nil // [30, 2000]
 }
