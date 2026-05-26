@@ -20,6 +20,7 @@ import (
 	"mist/proxy/wsconn"
 	"mist/util"
 
+	"MistCore/common/atomic"
 	"MistCore/common/buf"
 	"MistCore/common/bufio"
 	M "MistCore/common/metadata"
@@ -33,6 +34,7 @@ type Client struct {
 	opts          Options
 	passwordHash  []byte
 	tlsConfig     *tls.Config
+	padding       *padding.PaddingFactory
 	sessionClient *session.Client
 	die           context.Context
 	dieCancel     context.CancelFunc
@@ -57,19 +59,33 @@ func NewClient(opts Options) (*Client, error) {
 		cancel()
 		return nil, err
 	}
+	rawPadding, err := padding.GenerateProfileScheme(opts.TrafficProfile)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	paddingFactory := padding.NewPaddingFactory(rawPadding)
+	if paddingFactory == nil {
+		cancel()
+		return nil, fmt.Errorf("create padding profile %q", opts.TrafficProfile)
+	}
 	c := &Client{
 		opts:         opts,
 		passwordHash: opts.PasswordHash(),
 		tlsConfig:    tlsConfig,
+		padding:      paddingFactory,
 		die:          ctx,
 		dieCancel:    cancel,
 	}
+
+	var sessionPadding atomic.TypedValue[*padding.PaddingFactory]
+	sessionPadding.Store(paddingFactory)
 
 	sessionTimeout := time.Second * 30
 	c.sessionClient = session.NewClient(
 		ctx,
 		c.dialSession,
-		&padding.DefaultPaddingFactory,
+		&sessionPadding,
 		time.Second*30, // idle check interval
 		sessionTimeout,
 		opts.MinIdleSession,
@@ -167,7 +183,7 @@ func (c *Client) writeLegacyAuth(tlsConn net.Conn) error {
 
 	b.Write(c.passwordHash)
 	var paddingLen int
-	if pad, err := padding.DefaultPaddingFactory.Load().GenerateRecordPayloadSizes(0); err == nil && len(pad) > 0 {
+	if pad, err := c.padding.GenerateRecordPayloadSizes(0); err == nil && len(pad) > 0 {
 		paddingLen = pad[0]
 	}
 	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))

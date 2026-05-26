@@ -102,6 +102,12 @@ func TestOptionsSetDefaults(t *testing.T) {
 	if opts.Transport != "tls" {
 		t.Fatalf("default Transport = %q, want tls", opts.Transport)
 	}
+	if opts.TLSProfile != "default" {
+		t.Fatalf("default TLSProfile = %q, want default", opts.TLSProfile)
+	}
+	if opts.TrafficProfile != "web" {
+		t.Fatalf("default TrafficProfile = %q, want web", opts.TrafficProfile)
+	}
 }
 
 func TestTLSConfigDefaultTransportDoesNotAdvertiseHTTP(t *testing.T) {
@@ -113,6 +119,29 @@ func TestTLSConfigDefaultTransportDoesNotAdvertiseHTTP(t *testing.T) {
 	}
 	if len(cfg.NextProtos) != 0 {
 		t.Fatalf("NextProtos = %v, want empty for tls transport", cfg.NextProtos)
+	}
+}
+
+func TestTLSConfigWebProfileAdvertisesHTTP2AndHTTP11(t *testing.T) {
+	opts := Options{ServerAddr: "example.com:8443", Password: "test", TLSProfile: "web"}
+	opts.SetDefaults()
+	cfg, err := opts.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.NextProtos) != 2 || cfg.NextProtos[0] != "h2" || cfg.NextProtos[1] != "http/1.1" {
+		t.Fatalf("NextProtos = %v, want [h2 http/1.1]", cfg.NextProtos)
+	}
+}
+
+func TestOptionsValidateRejectsInvalidTrafficProfile(t *testing.T) {
+	opts := Options{
+		ServerAddr:     "example.com:8443",
+		Password:       "test",
+		TrafficProfile: "unknown",
+	}
+	if err := opts.Validate(); err == nil {
+		t.Fatal("expected invalid TrafficProfile to fail validation")
 	}
 }
 

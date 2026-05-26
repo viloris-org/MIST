@@ -44,6 +44,8 @@ type clientConfig struct {
 	minIdleSession  int
 	tlsMinVersion   string
 	transport       string
+	tlsProfile      string
+	trafficProfile  string
 	showVersion     bool
 	showVersionJSON bool
 	check           bool
@@ -219,6 +221,8 @@ func loadConfigFile(cfg *clientConfig) error {
 		TLSMinVersion:  cfg.tlsMinVersion,
 		MinIdleSession: cfg.minIdleSession,
 		Transport:      cfg.transport,
+		TLSProfile:     cfg.tlsProfile,
+		TrafficProfile: cfg.trafficProfile,
 		Listen:         cfg.listen,
 		Inbound:        cfg.inbound,
 		RedirectListen: cfg.redirectListen,
@@ -246,6 +250,8 @@ func loadConfigFile(cfg *clientConfig) error {
 	cfg.tlsMinVersion = fileCfg.TLS.MinVersion
 	cfg.minIdleSession = fileCfg.TLS.MinIdleSession
 	cfg.transport = fileCfg.TLS.Transport
+	cfg.tlsProfile = fileCfg.TLS.TLSProfile
+	cfg.trafficProfile = fileCfg.TLS.TrafficProfile
 	cfg.listen = fileCfg.Inbound.Listen
 	cfg.inbound = strings.Join(fileCfg.Inbound.Types, ",")
 	cfg.redirectListen = fileCfg.Inbound.RedirectListen
@@ -554,6 +560,8 @@ func parseClientConfig(args []string) (clientConfig, error) {
 	fs.IntVar(&cfg.minIdleSession, "m", 5, "reserved min idle session")
 	fs.StringVar(&cfg.tlsMinVersion, "tls-min-version", "1.2", "minimum TLS version (1.2 or 1.3)")
 	fs.StringVar(&cfg.transport, "transport", "tls", "transport mode: tls or wss")
+	fs.StringVar(&cfg.tlsProfile, "tls-profile", "", "TLS profile: default or web")
+	fs.StringVar(&cfg.trafficProfile, "traffic-profile", "", "padding traffic profile: web, api, or random")
 	fs.BoolVar(&cfg.showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.showVersionJSON, "version-json", false, "print version JSON and exit")
 	fs.BoolVar(&cfg.check, "check", false, "validate configuration and exit")
@@ -616,6 +624,8 @@ func (cfg clientConfig) clientOptions() (mistclient.Options, error) {
 		TLSMinVersion:  tlsMinVersion,
 		MinIdleSession: cfg.minIdleSession,
 		Transport:      cfg.transport,
+		TLSProfile:     cfg.tlsProfile,
+		TrafficProfile: cfg.trafficProfile,
 		Logger:         &logrusAdapter{},
 	}
 	opts.SetDefaults()

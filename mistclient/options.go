@@ -12,6 +12,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"mist/proxy/padding"
 )
 
 const certPinHexLen = sha256.Size * 2
@@ -22,11 +24,13 @@ type Options struct {
 	Transport  string // tls (default) or wss
 
 	// TLS
-	SNI           string    // override ServerName in TLS ClientHello
-	TLSCertSHA256 string    // hex-encoded SHA-256 of server cert DER for pinning
-	Insecure      bool      // skip all TLS verification
-	TLSMinVersion uint16    // 0 means tls.VersionTLS12
-	KeyLogWriter  io.Writer // optional TLS key log writer
+	SNI            string    // override ServerName in TLS ClientHello
+	TLSCertSHA256  string    // hex-encoded SHA-256 of server cert DER for pinning
+	Insecure       bool      // skip all TLS verification
+	TLSMinVersion  uint16    // 0 means tls.VersionTLS12
+	TLSProfile     string    // default or web
+	KeyLogWriter   io.Writer // optional TLS key log writer
+	TrafficProfile string    // web, api, or random
 
 	// Session pool
 	MinIdleSession    int
@@ -47,6 +51,12 @@ func (o *Options) SetDefaults() {
 	}
 	if o.TLSMinVersion == 0 {
 		o.TLSMinVersion = tls.VersionTLS12
+	}
+	if o.TLSProfile == "" {
+		o.TLSProfile = "default"
+	}
+	if o.TrafficProfile == "" {
+		o.TrafficProfile = "web"
 	}
 	if o.MinIdleSession == 0 {
 		o.MinIdleSession = 1
@@ -70,6 +80,14 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("Transport must be tls or wss")
 	}
 	if _, err := parseCertPin(o.TLSCertSHA256); err != nil {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(o.TLSProfile)) {
+	case "", "default", "web":
+	default:
+		return fmt.Errorf("TLSProfile must be default or web")
+	}
+	if err := padding.ValidateProfile(o.TrafficProfile); err != nil {
 		return err
 	}
 	return nil
@@ -101,7 +119,9 @@ func (o *Options) TLSConfig() (*tls.Config, error) {
 		KeyLogWriter:       o.KeyLogWriter,
 		CurvePreferences:   util.RandomizedCurvePreferences(),
 	}
-	if strings.EqualFold(strings.TrimSpace(o.Transport), "wss") {
+	if strings.EqualFold(strings.TrimSpace(o.TLSProfile), "web") {
+		cfg.NextProtos = []string{"h2", "http/1.1"}
+	} else if strings.EqualFold(strings.TrimSpace(o.Transport), "wss") {
 		cfg.NextProtos = []string{"http/1.1"}
 	}
 

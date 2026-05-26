@@ -37,3 +37,21 @@ func TestGenerateRecordPayloadSizesIntoReusesDestination(t *testing.T) {
 		t.Fatalf("destination was not reused: got cap %d, want %d", cap(got), cap(dst))
 	}
 }
+
+func TestGenerateProfileScheme(t *testing.T) {
+	for _, profile := range []string{ProfileWeb, ProfileAPI, ProfileRandom} {
+		raw, err := GenerateProfileScheme(profile)
+		if err != nil {
+			t.Fatalf("GenerateProfileScheme(%q): %v", profile, err)
+		}
+		if NewPaddingFactory(raw) == nil {
+			t.Fatalf("GenerateProfileScheme(%q) produced invalid scheme:\n%s", profile, raw)
+		}
+	}
+}
+
+func TestGenerateProfileSchemeRejectsUnknownProfile(t *testing.T) {
+	if _, err := GenerateProfileScheme("unknown"); err == nil {
+		t.Fatal("expected unknown profile to fail")
+	}
+}

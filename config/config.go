@@ -26,6 +26,8 @@ type TLSConfig struct {
 	MinVersion     string `toml:"min_version"`
 	MinIdleSession int    `toml:"min_idle_session"`
 	Transport      string `toml:"transport"`
+	TLSProfile     string `toml:"tls_profile"`
+	TrafficProfile string `toml:"traffic_profile"`
 }
 
 type InboundConfig struct {
@@ -80,6 +82,12 @@ func (c *ClientConfig) SetDefaults() {
 	}
 	if c.TLS.Transport == "" {
 		c.TLS.Transport = "tls"
+	}
+	if c.TLS.TLSProfile == "" {
+		c.TLS.TLSProfile = "default"
+	}
+	if c.TLS.TrafficProfile == "" {
+		c.TLS.TrafficProfile = "web"
 	}
 	if c.Inbound.Listen == "" {
 		c.Inbound.Listen = "127.0.0.1:1080"

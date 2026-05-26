@@ -22,12 +22,14 @@ import (
 var (
 	passwordSha256              []byte
 	serverPaddingSchemeExplicit bool
+	serverTrafficProfile        string
 )
 
 func main() {
 	listen := flag.String("l", "0.0.0.0:8443", "server listen port")
 	password := flag.String("p", "", "password")
 	paddingScheme := flag.String("padding-scheme", "", "padding-scheme")
+	trafficProfile := flag.String("traffic-profile", "web", "padding traffic profile: web, api, or random")
 	certType := flag.String("cert-type", "self-signed", "certificate type: self-signed (or self/ip), acme (or domain), or custom")
 	certName := flag.String("cert-name", "", "certificate IP address or domain name")
 	acmeHTTP := flag.String("acme-http", ":80", "ACME HTTP-01 challenge listen address")
@@ -64,6 +66,10 @@ func main() {
 			logrus.Fatalln(err)
 		}
 	}
+	if err := padding.ValidateProfile(*trafficProfile); err != nil {
+		logrus.Fatalln(err)
+	}
+	serverTrafficProfile = *trafficProfile
 
 	logLevel, err := logrus.ParseLevel(os.Getenv("LOG_LEVEL"))
 	if err != nil {
@@ -152,7 +158,7 @@ func baseTLSConfig(tlsMinVersion uint16) *tls.Config {
 	config := &tls.Config{
 		MinVersion:       tlsMinVersion,
 		CurvePreferences: util.RandomizedCurvePreferences(),
-		NextProtos:       []string{"http/1.1"},
+		NextProtos:       []string{"h2", "http/1.1"},
 	}
 	if tlsMinVersion == tls.VersionTLS12 {
 		config.CipherSuites = []uint16{
@@ -218,6 +224,7 @@ func newACMETLSConfig(certName, acmeHTTP, acmeCache, acmeEmail string, tlsMinVer
 	logrus.Infof("[Server] TLS ACME domain cert %s cache %s http-01 %s", domain, acmeCache, acmeHTTP)
 	tlsConfig := manager.TLSConfig()
 	tlsConfig.MinVersion = tlsMinVersion
+	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
 	if tlsMinVersion == tls.VersionTLS12 {
 		tlsConfig.CipherSuites = []uint16{
 			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,

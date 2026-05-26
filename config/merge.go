@@ -11,6 +11,8 @@ type CLIOverrides struct {
 	TLSMinVersion  string // -tls-min-version
 	MinIdleSession int    // -m
 	Transport      string // -transport
+	TLSProfile     string // -tls-profile
+	TrafficProfile string // -traffic-profile
 	Listen         string // -l
 	Inbound        string // -inbound
 	RedirectListen string // -redirect-listen
@@ -54,6 +56,12 @@ func (c *ClientConfig) ApplyCLIOverrides(cli *CLIOverrides) {
 	}
 	if cli.Transport != "" {
 		c.TLS.Transport = cli.Transport
+	}
+	if cli.TLSProfile != "" {
+		c.TLS.TLSProfile = cli.TLSProfile
+	}
+	if cli.TrafficProfile != "" {
+		c.TLS.TrafficProfile = cli.TrafficProfile
 	}
 	if cli.Listen != "" {
 		c.Inbound.Listen = cli.Listen

@@ -16,6 +16,8 @@ password = "secret"
 sni = "example.com"
 min_version = "1.3"
 min_idle_session = 10
+tls_profile = "web"
+traffic_profile = "api"
 
 [tun]
 enabled = true
@@ -51,6 +53,12 @@ listen = "127.0.0.1:5354"
 	if cfg.TLS.MinIdleSession != 10 {
 		t.Errorf("TLS.MinIdleSession = %d, want 10", cfg.TLS.MinIdleSession)
 	}
+	if cfg.TLS.TLSProfile != "web" {
+		t.Errorf("TLS.TLSProfile = %q, want web", cfg.TLS.TLSProfile)
+	}
+	if cfg.TLS.TrafficProfile != "api" {
+		t.Errorf("TLS.TrafficProfile = %q, want api", cfg.TLS.TrafficProfile)
+	}
 	if !cfg.Tun.Enabled {
 		t.Error("Tun.Enabled = false, want true")
 	}
@@ -77,6 +85,12 @@ func TestSetDefaults(t *testing.T) {
 	}
 	if cfg.TLS.MinIdleSession != 5 {
 		t.Errorf("TLS.MinIdleSession = %d, want 5", cfg.TLS.MinIdleSession)
+	}
+	if cfg.TLS.TLSProfile != "default" {
+		t.Errorf("TLS.TLSProfile = %q, want default", cfg.TLS.TLSProfile)
+	}
+	if cfg.TLS.TrafficProfile != "web" {
+		t.Errorf("TLS.TrafficProfile = %q, want web", cfg.TLS.TrafficProfile)
 	}
 	if cfg.Inbound.Listen != "127.0.0.1:1080" {
 		t.Errorf("Inbound.Listen = %q", cfg.Inbound.Listen)

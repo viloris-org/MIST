@@ -47,8 +47,14 @@ const (
 	maxRulesPerRecord    = 64
 )
 
+const (
+	ProfileRandom = "random"
+	ProfileWeb    = "web"
+	ProfileAPI    = "api"
+)
+
 var defaultPaddingScheme = func() []byte {
-	scheme, err := GenerateRandomScheme()
+	scheme, err := GenerateProfileScheme(ProfileWeb)
 	if err != nil {
 		// Fallback to a fixed scheme; should never happen.
 		return []byte("stop=8\n0=30-30\n1=100-400\n2=400-500,c,500-1000,c,500-1000,c,500-1000,c,500-1000\n3=9-9,500-1000\n4=500-1000\n5=500-1000\n6=500-1000\n7=500-1000")
@@ -198,11 +204,41 @@ func FillRandom(buf []byte) error {
 	return err
 }
 
-// GenerateRandomScheme creates a randomized padding scheme with stop between
-// 50 and 200. Packet 0 is kept at 30-30 for preamble compatibility. Remaining
-// packets get randomized rules: some carry checkmarks for real data, others
-// are pure waste. Waste sizes vary between 30 and 2000 bytes.
+// GenerateRandomScheme creates a legacy randomized padding scheme.
 func GenerateRandomScheme() ([]byte, error) {
+	return GenerateProfileScheme(ProfileRandom)
+}
+
+// GenerateProfileScheme creates a randomized padding scheme for a traffic
+// profile. Packet 0 is kept at 30-30 for preamble compatibility.
+func GenerateProfileScheme(profile string) ([]byte, error) {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", ProfileWeb:
+		return generateWebScheme()
+	case ProfileAPI:
+		return generateAPIScheme()
+	case ProfileRandom:
+		return generateRandomScheme()
+	default:
+		return nil, fmt.Errorf("unknown padding profile %q", profile)
+	}
+}
+
+// ValidateProfile returns an error if profile is not a supported padding
+// profile.
+func ValidateProfile(profile string) error {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", ProfileWeb, ProfileAPI, ProfileRandom:
+		return nil
+	default:
+		return fmt.Errorf("unknown padding profile %q", profile)
+	}
+}
+
+// generateRandomScheme creates a randomized padding scheme with stop between
+// 50 and 200. Remaining packets get randomized rules: some carry checkmarks for
+// real data, others are pure waste. Waste sizes vary between 30 and 2000 bytes.
+func generateRandomScheme() ([]byte, error) {
 	stop, err := randomInt(151) // [0, 150]
 	if err != nil {
 		return nil, err
@@ -270,6 +306,190 @@ func GenerateRandomScheme() ([]byte, error) {
 	}
 
 	return []byte(sb.String()), nil
+}
+
+// generateWebScheme biases packet sizes toward a rough HTTPS browsing shape:
+// small request/header-like records, medium API/html chunks, and occasional
+// larger asset-like chunks. It is still randomized per session.
+func generateWebScheme() ([]byte, error) {
+	stop, err := randomInt(121) // [0, 120]
+	if err != nil {
+		return nil, err
+	}
+	stop += 80 // [80, 200]
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "stop=%d\n", stop)
+	sb.WriteString("0=30-30\n")
+
+	for pkt := 1; pkt < stop; pkt++ {
+		fmt.Fprintf(&sb, "%d=", pkt)
+		phase := webPhase(pkt, stop)
+		if err := appendProfileRule(&sb, phase); err != nil {
+			return nil, err
+		}
+		sb.WriteByte('\n')
+	}
+
+	return []byte(sb.String()), nil
+}
+
+// generateAPIScheme is lower overhead than web while avoiding fixed packet
+// sizes. It favours small and medium records with fewer asset-sized chunks.
+func generateAPIScheme() ([]byte, error) {
+	stop, err := randomInt(81) // [0, 80]
+	if err != nil {
+		return nil, err
+	}
+	stop += 40 // [40, 120]
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "stop=%d\n", stop)
+	sb.WriteString("0=30-30\n")
+
+	for pkt := 1; pkt < stop; pkt++ {
+		fmt.Fprintf(&sb, "%d=", pkt)
+		if err := appendProfileRule(&sb, profilePhaseAPI); err != nil {
+			return nil, err
+		}
+		sb.WriteByte('\n')
+	}
+
+	return []byte(sb.String()), nil
+}
+
+const (
+	profilePhaseWarmup = iota
+	profilePhaseBurst
+	profilePhaseTail
+	profilePhaseAPI
+)
+
+func webPhase(pkt, stop int) int {
+	switch {
+	case pkt < 8:
+		return profilePhaseWarmup
+	case pkt < stop/3:
+		return profilePhaseBurst
+	default:
+		return profilePhaseTail
+	}
+}
+
+func appendProfileRule(sb *strings.Builder, phase int) error {
+	kind, err := randomInt(100)
+	if err != nil {
+		return err
+	}
+
+	switch phase {
+	case profilePhaseWarmup:
+		return appendWarmupRule(sb, kind)
+	case profilePhaseBurst:
+		return appendBurstRule(sb, kind)
+	case profilePhaseAPI:
+		return appendAPIRule(sb, kind)
+	default:
+		return appendTailRule(sb, kind)
+	}
+}
+
+func appendWarmupRule(sb *strings.Builder, kind int) error {
+	switch {
+	case kind < 20:
+		sb.WriteString("c")
+	case kind < 70:
+		return appendWasteCheckWaste(sb, 40, 360, 40, 900)
+	default:
+		return appendWasteRange(sb, 300, 1500)
+	}
+	return nil
+}
+
+func appendBurstRule(sb *strings.Builder, kind int) error {
+	switch {
+	case kind < 12:
+		sb.WriteString("c")
+	case kind < 38:
+		return appendWasteCheckWaste(sb, 60, 700, 300, 1500)
+	case kind < 82:
+		return appendWasteRange(sb, 900, 4096)
+	case kind < 96:
+		return appendWasteRange(sb, 4096, MaxRecordPayloadSize)
+	default:
+		return appendTwoWasteRanges(sb, 300, 1500, 900, 4096)
+	}
+	return nil
+}
+
+func appendTailRule(sb *strings.Builder, kind int) error {
+	switch {
+	case kind < 28:
+		sb.WriteString("c")
+	case kind < 58:
+		return appendWasteCheckWaste(sb, 40, 220, 40, 700)
+	case kind < 88:
+		return appendWasteRange(sb, 120, 1200)
+	default:
+		return appendWasteRange(sb, 1200, 4096)
+	}
+	return nil
+}
+
+func appendAPIRule(sb *strings.Builder, kind int) error {
+	switch {
+	case kind < 30:
+		sb.WriteString("c")
+	case kind < 70:
+		return appendWasteCheckWaste(sb, 40, 220, 40, 700)
+	case kind < 95:
+		return appendWasteRange(sb, 300, 1500)
+	default:
+		return appendWasteRange(sb, 1500, 4096)
+	}
+	return nil
+}
+
+func appendWasteRange(sb *strings.Builder, minSize, maxSize int) error {
+	w, err := randomRange(minSize, maxSize)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(sb, "%d-%d", w, w)
+	return nil
+}
+
+func appendTwoWasteRanges(sb *strings.Builder, minA, maxA, minB, maxB int) error {
+	if err := appendWasteRange(sb, minA, maxA); err != nil {
+		return err
+	}
+	sb.WriteByte(',')
+	return appendWasteRange(sb, minB, maxB)
+}
+
+func appendWasteCheckWaste(sb *strings.Builder, minA, maxA, minB, maxB int) error {
+	if err := appendWasteRange(sb, minA, maxA); err != nil {
+		return err
+	}
+	sb.WriteString(",c,")
+	return appendWasteRange(sb, minB, maxB)
+}
+
+func randomRange(minSize, maxSize int) (int, error) {
+	if minSize < 1 {
+		minSize = 1
+	}
+	if maxSize > MaxRecordPayloadSize {
+		maxSize = MaxRecordPayloadSize
+	}
+	if maxSize < minSize {
+		maxSize = minSize
+	}
+	n, err := randomInt(maxSize - minSize + 1)
+	if err != nil {
+		return 0, err
+	}
+	return minSize + n, nil
 }
 
 func randomWasteSize() (int, error) {

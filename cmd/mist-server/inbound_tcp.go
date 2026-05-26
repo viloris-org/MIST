@@ -88,7 +88,7 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 	if serverPaddingSchemeExplicit {
 		sessionPadding.Store(padding.DefaultPaddingFactory.Load())
 	} else {
-		randomScheme, err := padding.GenerateRandomScheme()
+		randomScheme, err := padding.GenerateProfileScheme(serverTrafficProfile)
 		if err == nil {
 			if f := padding.NewPaddingFactory(randomScheme); f != nil {
 				sessionPadding.Store(f)
