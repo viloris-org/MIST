@@ -26,9 +26,6 @@ mtu = 1400
 enabled = true
 listen = "127.0.0.1:5354"
 
-[web]
-enabled = true
-listen = "127.0.0.1:8080"
 `
 	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
 		t.Fatal(err)
@@ -69,9 +66,6 @@ listen = "127.0.0.1:8080"
 	if cfg.DNS.Listen != "127.0.0.1:5354" {
 		t.Errorf("DNS.Listen = %q", cfg.DNS.Listen)
 	}
-	if !cfg.Web.Enabled {
-		t.Error("Web.Enabled = false, want true")
-	}
 }
 
 func TestSetDefaults(t *testing.T) {
@@ -98,9 +92,6 @@ func TestSetDefaults(t *testing.T) {
 	}
 	if cfg.Tun.Address != "10.0.0.2/24" {
 		t.Errorf("Tun.Address = %q", cfg.Tun.Address)
-	}
-	if cfg.Web.Listen != "127.0.0.1:9090" {
-		t.Errorf("Web.Listen = %q", cfg.Web.Listen)
 	}
 	if cfg.DNS.Listen != "127.0.0.1:5353" {
 		t.Errorf("DNS.Listen = %q", cfg.DNS.Listen)

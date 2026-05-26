@@ -22,7 +22,6 @@ import (
 	"mist/mistclient"
 	"mist/tun"
 	"mist/util"
-	"mist/web"
 
 	"MistCore/common/buf"
 	"MistCore/common/bufio"
@@ -62,12 +61,6 @@ type clientConfig struct {
 	dnsEnabled   bool
 	dnsListen    string
 	dnsUpstream  string
-
-	webEnabled  bool
-	webListen   string
-	webPassword string
-	webTLSCert string
-	webTLSKey  string
 }
 
 type inboundSet struct {
@@ -75,7 +68,6 @@ type inboundSet struct {
 	redirect  bool
 	tun       bool
 	dns       bool
-	web       bool
 }
 
 func main() {
@@ -179,12 +171,6 @@ func run(args []string) error {
 		globalStatus.SetDNS(dnsSrv)
 	}
 
-	// Web dashboard.
-	if inbounds.web {
-		dash := startWeb(cfg, globalStatus)
-		defer dash.Stop()
-	}
-
 	// SOCKS/HTTP listener.
 	if inbounds.socksHTTP {
 		listener, err := net.Listen("tcp", cfg.listen)
@@ -245,11 +231,6 @@ func loadConfigFile(cfg *clientConfig) error {
 		DNS:            cfg.dnsEnabled,
 		DNSListen:      cfg.dnsListen,
 		DNSUpstream:    cfg.dnsUpstream,
-		Web:            cfg.webEnabled,
-		WebListen:      cfg.webListen,
-		WebPassword:    cfg.webPassword,
-		WebTLSCert:     cfg.webTLSCert,
-		WebTLSKey:      cfg.webTLSKey,
 		StatusJSON:     cfg.statusJSON,
 	}
 	fileCfg.ApplyCLIOverrides(cli)
@@ -276,12 +257,6 @@ func loadConfigFile(cfg *clientConfig) error {
 	cfg.dnsEnabled = fileCfg.DNS.Enabled
 	cfg.dnsListen = fileCfg.DNS.Listen
 	cfg.dnsUpstream = strings.Join(fileCfg.DNS.Upstream, ",")
-	cfg.webEnabled = fileCfg.Web.Enabled
-	cfg.webListen = fileCfg.Web.Listen
-	cfg.webPassword = fileCfg.Web.Password
-	cfg.webTLSCert = fileCfg.Web.TLSCert
-	cfg.webTLSKey = fileCfg.Web.TLSKey
-
 	return nil
 }
 
@@ -298,8 +273,6 @@ func (cfg clientConfig) parseInboundSet() (inboundSet, error) {
 			set.tun = true
 		case "dns":
 			set.dns = true
-		case "web":
-			set.web = true
 		default:
 			return set, fmt.Errorf("unsupported inbound %q", item)
 		}
@@ -311,10 +284,7 @@ func (cfg clientConfig) parseInboundSet() (inboundSet, error) {
 	if cfg.dnsEnabled {
 		set.dns = true
 	}
-	if cfg.webEnabled {
-		set.web = true
-	}
-	if !set.socksHTTP && !set.redirect && !set.tun && !set.dns && !set.web {
+	if !set.socksHTTP && !set.redirect && !set.tun && !set.dns {
 		return set, fmt.Errorf("at least one inbound is required")
 	}
 	return set, nil
@@ -481,28 +451,7 @@ func startDNS(ctx context.Context, cfg clientConfig, client *mistclient.Client) 
 	return srv, nil
 }
 
-// --- Web ---
-
-func startWeb(cfg clientConfig, gs *globalStatus) *web.Dashboard {
-	addr := cfg.webListen
-	if addr == "" {
-		addr = "127.0.0.1:9090"
-	}
-	var opts []web.Option
-	if cfg.webPassword != "" {
-		opts = append(opts, web.WithPassword(cfg.webPassword))
-	}
-	if cfg.webTLSCert != "" && cfg.webTLSKey != "" {
-		opts = append(opts, web.WithTLS(cfg.webTLSCert, cfg.webTLSKey))
-	}
-	dash := web.New(addr, gs, opts...)
-	if err := dash.Start(); err != nil {
-		logrus.Errorf("Dashboard: %v", err)
-	}
-	return dash
-}
-
-// --- Global status (shared between statusReporter and web dashboard) ---
+// --- Global status (shared between statusReporter and status file) ---
 
 type globalStatus struct {
 	startedAt time.Time
@@ -586,48 +535,6 @@ func (gs *globalStatus) StatusJSON() ([]byte, error) {
 	return json.Marshal(body)
 }
 
-// ConfigJSON returns the current client configuration as JSON.
-func (gs *globalStatus) ConfigJSON() ([]byte, error) {
-	gs.mu.Lock()
-	st := gs.serverState
-	le := gs.lastError
-	gs.mu.Unlock()
-
-	cfg := map[string]any{
-		"server":        gs.server,
-		"server_state":  st,
-		"last_error":    le,
-		"listen":        gs.cfg.listen,
-		"inbound":       gs.cfg.inbound,
-		"redirect_listen": gs.cfg.redirectListen,
-		"min_idle_session": gs.cfg.minIdleSession,
-		"tls_min_version":  gs.cfg.tlsMinVersion,
-		"insecure":         gs.cfg.insecure,
-	}
-
-	if gs.tun != nil {
-		cfg["tun"] = map[string]any{
-			"name":    gs.cfg.tunName,
-			"mtu":     gs.cfg.tunMTU,
-			"address": gs.cfg.tunAddr,
-		}
-	}
-	if gs.dns != nil {
-		cfg["dns"] = map[string]any{
-			"listen":   gs.cfg.dnsListen,
-			"upstream": gs.cfg.dnsUpstream,
-		}
-	}
-	if gs.cfg.webEnabled {
-		cfg["web"] = map[string]any{
-			"listen": gs.cfg.webListen,
-			"has_password": gs.cfg.webPassword != "",
-		}
-	}
-
-	return json.Marshal(cfg)
-}
-
 // --- CLI parsing ---
 
 func parseClientConfig(args []string) (clientConfig, error) {
@@ -650,7 +557,7 @@ func parseClientConfig(args []string) (clientConfig, error) {
 	fs.StringVar(&cfg.statusJSON, "status-json", "", "write runtime status JSON to this path")
 	fs.StringVar(&cfg.logFormat, "log-format", "text", "log format: text or json")
 	fs.StringVar(&cfg.logFile, "log-file", "", "append logs to this file while keeping stderr output")
-	fs.StringVar(&cfg.inbound, "inbound", "socks,http", "comma-separated inbounds: socks,http,redirect,tun,dns,web")
+	fs.StringVar(&cfg.inbound, "inbound", "socks,http", "comma-separated inbounds: socks,http,redirect,tun,dns")
 	fs.StringVar(&cfg.redirectListen, "redirect-listen", "127.0.0.1:12345", "transparent redirect listen address")
 
 	// TUN flags.
@@ -665,13 +572,6 @@ func parseClientConfig(args []string) (clientConfig, error) {
 	fs.BoolVar(&cfg.dnsEnabled, "dns", false, "enable DNS proxy")
 	fs.StringVar(&cfg.dnsListen, "dns-listen", "127.0.0.1:5353", "DNS proxy listen address")
 	fs.StringVar(&cfg.dnsUpstream, "dns-upstream", "", "comma-separated upstream DNS servers")
-
-	// Web flags.
-	fs.BoolVar(&cfg.webEnabled, "web", false, "enable web dashboard")
-	fs.StringVar(&cfg.webListen, "web-listen", "127.0.0.1:9090", "web dashboard listen address")
-	fs.StringVar(&cfg.webPassword, "web-password", "", "dashboard login password")
-	fs.StringVar(&cfg.webTLSCert, "web-tls-cert", "", "dashboard TLS certificate file")
-	fs.StringVar(&cfg.webTLSKey, "web-tls-key", "", "dashboard TLS key file")
 
 	if err := fs.Parse(args); err != nil {
 		return cfg, err

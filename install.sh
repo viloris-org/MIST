@@ -46,19 +46,6 @@ if [[ "$LANG" =~ ^zh ]]; then
 	T[prompt_key_path]="请输入您的私钥 file 路径 (key-file)"
 	T[prompt_self_name]="请输入自签名证书名称或 IP 地址 [默认自动推断]"
 	T[prompt_fallback]="请输入非授权流量回落地址 (如 127.0.0.1:80，留空默认返回 HTTP 400)"
-	T[web_title]="Web 管理面板配置"
-	T[prompt_web_enable]="是否启用 Web 管理面板? (y/n)"
-	T[prompt_web_listen]="请输入管理面板监听地址"
-	T[prompt_web_pw]="请输入管理面板登录密码 (留空则不启用密码认证)"
-	T[prompt_web_tls]="是否为管理面板启用 TLS/HTTPS? (y/n)"
-	T[prompt_web_tls_reuse]="是否复用主服务 TLS 证书? (y/n)"
-	T[prompt_web_tls_cert]="请输入管理面板 TLS 证书文件路径"
-	T[prompt_web_tls_key]="请输入管理面板 TLS 私钥文件路径"
-	T[summary_web]="管理面板"
-	T[summary_web_enabled]="已启用"
-	T[summary_web_disabled]="未启用"
-	T[web_url]="管理面板地址"
-	T[web_pw]="管理面板密码"
 	T[summary_title]="配置确认"
 	T[summary_port]="监听端口"
 	T[summary_pw]="连接密码"
@@ -125,19 +112,6 @@ else
 	T[prompt_key_path]="Please enter your private key file path (key-file)"
 	T[prompt_self_name]="Please enter self-signed certificate name or IP [Default auto-derived]"
 	T[prompt_fallback]="Please enter unauthorized traffic fallback address (e.g. 127.0.0.1:80, leave empty for HTTP 400)"
-	T[web_title]="Web Dashboard Configuration"
-	T[prompt_web_enable]="Enable the web dashboard? (y/n)"
-	T[prompt_web_listen]="Please enter the dashboard listen address"
-	T[prompt_web_pw]="Please enter the dashboard login password (leave empty to disable authentication)"
-	T[prompt_web_tls]="Enable TLS/HTTPS for the dashboard? (y/n)"
-	T[prompt_web_tls_reuse]="Reuse the main server TLS certificate? (y/n)"
-	T[prompt_web_tls_cert]="Please enter the dashboard TLS certificate file path"
-	T[prompt_web_tls_key]="Please enter the dashboard TLS private key file path"
-	T[summary_web]="Dashboard"
-	T[summary_web_enabled]="Enabled"
-	T[summary_web_disabled]="Disabled"
-	T[web_url]="Dashboard URL"
-	T[web_pw]="Dashboard Password"
 	T[summary_title]="Configuration Summary"
 	T[summary_port]="Listening Port"
 	T[summary_pw]="Connection Password"
@@ -304,16 +278,6 @@ build_args() {
 			args="$args -cert-file $CERT_FILE -key-file $KEY_FILE" ;;
 	esac
 	[ -n "$FALLBACK" ] && args="$args -fallback $FALLBACK"
-	# Web dashboard flags.
-	if [ "$WEB_ENABLED" = "true" ]; then
-		args="$args -web -web-listen $WEB_LISTEN"
-		[ -n "$WEB_PASSWORD" ] && args="$args -web-password $WEB_PASSWORD"
-		if [ "$WEB_TLS_ENABLED" = "true" ]; then
-			args="$args -web-tls"
-		elif [ -n "$WEB_TLS_CERT" ]; then
-			args="$args -web-tls-cert $WEB_TLS_CERT -web-tls-key $WEB_TLS_KEY"
-		fi
-	fi
 	echo "$args"
 }
 
@@ -353,22 +317,6 @@ print_client_guide() {
 	esac
 }
 
-dashboard_url() {
-	local scheme="http"
-	local hostport="$WEB_LISTEN"
-	if [ "$WEB_TLS_ENABLED" = "true" ] || [ -n "$WEB_TLS_CERT" ]; then
-		scheme="https"
-	fi
-	if [ "$WEB_TLS_ENABLED" = "true" ] && [ "$CERT_TYPE" = "acme" ] && [ -n "$CERT_NAME" ]; then
-		local port="${WEB_LISTEN##*:}"
-		if [[ "$port" =~ ^[0-9]+$ ]]; then
-			hostport="$CERT_NAME:$port"
-		else
-			hostport="$CERT_NAME"
-		fi
-	fi
-	printf '%s://%s' "$scheme" "$hostport"
-}
 
 # --- banner ----------------------------------------------------------------
 echo -e "${CYAN}"
@@ -519,46 +467,6 @@ esac
 ask "$(msg prompt_fallback): " FALLBACK
 FALLBACK="${FALLBACK:-}"
 
-# web dashboard
-echo -e "\n${PURPLE}━━━ $(msg web_title) ━━━${NC}"
-WEB_ENABLED="false"
-WEB_LISTEN="127.0.0.1:9090"
-WEB_PASSWORD=""
-WEB_TLS_ENABLED="false"
-WEB_TLS_CERT=""
-WEB_TLS_KEY=""
-
-ask "$(msg prompt_web_enable) [$(msg default): n]: " web_choice
-if [[ "${web_choice:-n}" =~ ^[Yy]$ ]]; then
-	WEB_ENABLED="true"
-
-	ask "$(msg prompt_web_listen) [$(msg default) $WEB_LISTEN]: " input_web_listen
-	WEB_LISTEN=${input_web_listen:-$WEB_LISTEN}
-
-	# Generate a random password for dashboard
-	default_web_pw=$(random_alnum 16)
-	ask "$(msg prompt_web_pw) [$(msg default_random): $default_web_pw]: " input_web_pw
-	WEB_PASSWORD=${input_web_pw:-$default_web_pw}
-
-	ask "$(msg prompt_web_tls) [$(msg default): n]: " web_tls_choice
-	if [[ "${web_tls_choice:-n}" =~ ^[Yy]$ ]]; then
-		ask "$(msg prompt_web_tls_reuse) [$(msg default): y]: " web_tls_reuse
-		if [[ "${web_tls_reuse:-y}" =~ ^[Yy]$ ]]; then
-			WEB_TLS_ENABLED="true"
-		else
-			while true; do
-				ask "$(msg prompt_web_tls_cert): " WEB_TLS_CERT
-				[ -f "$WEB_TLS_CERT" ] && break
-				echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
-			done
-			while true; do
-				ask "$(msg prompt_web_tls_key): " WEB_TLS_KEY
-				[ -f "$WEB_TLS_KEY" ] && break
-				echo -e "${RED}[ERROR]${NC} $(msg err_file_not_found)"
-			done
-		fi
-	fi
-fi
 
 # --- 4. summary & confirmation ---------------------------------------------
 echo -e "\n${BLUE}[3/5]${NC} ${PURPLE}━━━ $(msg summary_title) ━━━${NC}"
@@ -567,15 +475,6 @@ echo -e "  $(msg summary_pw):   ${GREEN}$PASSWORD${NC}"
 echo -e "  $(msg summary_cert):     ${GREEN}$CERT_TYPE${NC}"
 [ -n "$CERT_NAME" ]  && echo -e "  Cert Name:       ${CYAN}$CERT_NAME${NC}"
 [ "${FALLBACK:-}" ]  && echo -e "  $(msg summary_fallback):  ${CYAN}$FALLBACK${NC}" || echo -e "  $(msg summary_fallback):  ${YELLOW}(none — HTTP 400)${NC}"
-if [ "$WEB_ENABLED" = "true" ]; then
-	echo -e "  $(msg summary_web):     ${GREEN}$(msg summary_web_enabled)${NC}"
-	echo -e "  $(msg web_url):     ${CYAN}$(dashboard_url)${NC}"
-	echo -e "  $(msg web_pw):     ${YELLOW}$WEB_PASSWORD${NC}"
-	[ "$WEB_TLS_ENABLED" = "true" ] && echo -e "  Dashboard TLS:   ${GREEN}Enabled (reusing server certificate)${NC}"
-	[ -n "$WEB_TLS_CERT" ] && echo -e "  Dashboard TLS:   ${GREEN}Enabled${NC}"
-else
-	echo -e "  $(msg summary_web):     ${YELLOW}$(msg summary_web_disabled)${NC}"
-fi
 echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
 ask "$(msg confirm_install) [$(msg default): y]: " confirmed
@@ -617,10 +516,6 @@ if [[ "${is_systemd:-y}" =~ ^[Yy]$ ]]; then
 	echo -e "  $(msg connect_pw):   ${YELLOW}$PASSWORD${NC}"
 	echo -e "  $(msg cert_mode):   ${CYAN}$CERT_TYPE${NC}"
 
-		if [ "$WEB_ENABLED" = "true" ]; then
-			echo -e "  $(msg web_url): ${CYAN}$(dashboard_url)${NC}"
-			echo -e "  $(msg web_pw): ${YELLOW}$WEB_PASSWORD${NC}"
-		fi
 	echo -e "  $(msg extract_fingerprint)"
 	SHA256=$(extract_fingerprint)
 	print_client_guide "$SHA256"

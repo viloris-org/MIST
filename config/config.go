@@ -16,7 +16,6 @@ type ClientConfig struct {
 	Inbound InboundConfig `toml:"inbound"`
 	Tun     TunConfig     `toml:"tun"`
 	DNS     DNSConfig     `toml:"dns"`
-	Web     WebConfig     `toml:"web"`
 	Log     LogConfig     `toml:"log"`
 }
 
@@ -47,14 +46,6 @@ type DNSConfig struct {
 	Enabled  bool     `toml:"enabled"`
 	Listen   string   `toml:"listen"`
 	Upstream []string `toml:"upstream"`
-}
-
-type WebConfig struct {
-	Enabled  bool   `toml:"enabled"`
-	Listen   string `toml:"listen"`
-	Password string `toml:"password"`
-	TLSCert  string `toml:"tls_cert"`
-	TLSKey   string `toml:"tls_key"`
 }
 
 type LogConfig struct {
@@ -109,9 +100,6 @@ func (c *ClientConfig) SetDefaults() {
 	}
 	if c.DNS.Listen == "" {
 		c.DNS.Listen = "127.0.0.1:5353"
-	}
-	if c.Web.Listen == "" {
-		c.Web.Listen = "127.0.0.1:9090"
 	}
 	if c.Log.Format == "" {
 		c.Log.Format = "text"

@@ -24,11 +24,6 @@ type CLIOverrides struct {
 	DNS            bool   // -dns
 	DNSListen      string // -dns-listen
 	DNSUpstream    string // -dns-upstream
-	Web            bool   // -web
-	WebListen      string // -web-listen
-	WebPassword    string // -web-password
-	WebTLSCert     string // -web-tls-cert
-	WebTLSKey      string // -web-tls-key
 	StatusJSON     string // -status-json
 }
 
@@ -112,22 +107,6 @@ func (c *ClientConfig) ApplyCLIOverrides(cli *CLIOverrides) {
 		c.DNS.Upstream = filterEmpty(splitCSV(cli.DNSUpstream))
 	}
 
-	// Web overrides
-	if cli.Web {
-		c.Web.Enabled = true
-	}
-	if cli.WebListen != "" {
-		c.Web.Listen = cli.WebListen
-	}
-	if cli.WebPassword != "" {
-		c.Web.Password = cli.WebPassword
-	}
-	if cli.WebTLSCert != "" {
-		c.Web.TLSCert = cli.WebTLSCert
-	}
-	if cli.WebTLSKey != "" {
-		c.Web.TLSKey = cli.WebTLSKey
-	}
 }
 
 func splitCSV(s string) []string {

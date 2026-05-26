@@ -9,7 +9,6 @@ import (
 	"io"
 	"mist/proxy/padding"
 	"mist/util"
-	"mist/web"
 	"net"
 	"net/http"
 	"os"
@@ -39,12 +38,6 @@ func main() {
 	readTimeout := flag.Duration("read-timeout", 5*time.Minute, "read deadline for idle connections (0 = disabled)")
 	keepalive := flag.Duration("keepalive", 30*time.Second, "keepalive interval (0 = disabled)")
 	synRateLimit := flag.Int("syn-rate-limit", 0, "max SYN frames per second per session (0 = unlimited)")
-	webEnabled := flag.Bool("web", false, "enable web dashboard")
-	webListen := flag.String("web-listen", "127.0.0.1:9090", "web dashboard listen address")
-	webPassword := flag.String("web-password", "", "dashboard login password")
-	webTLS := flag.Bool("web-tls", false, "enable dashboard TLS using the main server certificate")
-	webTLSCert := flag.String("web-tls-cert", "", "dashboard TLS certificate file")
-	webTLSKey := flag.String("web-tls-key", "", "dashboard TLS key file")
 	flag.Parse()
 
 	if *password == "" {
@@ -104,24 +97,6 @@ func main() {
 
 	ctx := context.Background()
 	server := NewMyServer(tlsConfig, *fallback, *maxStreams, *readTimeout, *keepalive, *synRateLimit, passwordSha256)
-	server.SetConfigInfo(*listen, *certType, *certName)
-
-	// Start web dashboard if enabled.
-	if *webEnabled {
-		var opts []web.Option
-		if *webPassword != "" {
-			opts = append(opts, web.WithPassword(*webPassword))
-		}
-		if *webTLSCert != "" && *webTLSKey != "" {
-			opts = append(opts, web.WithTLS(*webTLSCert, *webTLSKey))
-		} else if *webTLS {
-			opts = append(opts, web.WithTLSConfig(tlsConfig))
-		}
-		dash := web.New(*webListen, server, opts...)
-		if err := dash.Start(); err != nil {
-			logrus.Fatalln("dashboard:", err)
-		}
-	}
 
 	for {
 		c, err := listener.Accept()
