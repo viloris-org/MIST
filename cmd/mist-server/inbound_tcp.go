@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/base64"
+	"fmt"
 	"mist/proxy"
 	"mist/proxy/padding"
 	"mist/proxy/session"
+	"mist/proxy/wsconn"
 	"net"
 	"runtime/debug"
 	"strings"
@@ -51,9 +54,11 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 	}
 
 	// Phase 2: try HTTP-embedded auth format.
+	var wsKey []byte
 	if !authenticated {
 		b.Resize(0, n)
 		if tryHTTPAuth(b, passwordSha256) {
+			wsKey = extractHeaderValue(b.Bytes(), []byte("Sec-WebSocket-Key"))
 			// Discard remaining body bytes (padding).
 			b.Resize(0, 0)
 			authenticated = true
@@ -67,6 +72,13 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		return
 	}
 	_ = c.SetReadDeadline(time.Time{})
+	if len(wsKey) > 0 {
+		if err := writeWebSocketUpgrade(c, wsKey); err != nil {
+			logrus.Debugln("write websocket upgrade:", err)
+			return
+		}
+		c = wsconn.NewServer(c)
+	}
 
 	s.SessionAccepted()
 	defer s.SessionClosed()
@@ -167,12 +179,31 @@ func tryHTTPAuth(b *buf.Buffer, passwordHash []byte) bool {
 }
 
 func extractBearerToken(headers []byte) []byte {
-	for _, prefix := range [][]byte{
-		[]byte("Authorization: Bearer "),
-		[]byte("authorization: bearer "),
-		[]byte("Authorization: bearer "),
-		[]byte("AUTHORIZATION: BEARER "),
-	} {
+	return extractHeaderPrefixValue(headers, []byte("Authorization: Bearer "))
+}
+
+func extractHeaderValue(headers []byte, name []byte) []byte {
+	lowerName := bytes.ToLower(name)
+	for _, line := range bytes.Split(headers, []byte("\r\n")) {
+		colon := bytes.IndexByte(line, ':')
+		if colon < 0 {
+			continue
+		}
+		if !bytes.Equal(bytes.ToLower(bytes.TrimSpace(line[:colon])), lowerName) {
+			continue
+		}
+		return bytes.TrimSpace(line[colon+1:])
+	}
+	return nil
+}
+
+func extractHeaderPrefixValue(headers []byte, prefix []byte) []byte {
+	prefixes := [][]byte{
+		prefix,
+		bytes.ToLower(prefix),
+		bytes.ToUpper(prefix),
+	}
+	for _, prefix := range prefixes {
 		idx := bytes.Index(headers, prefix)
 		if idx < 0 {
 			continue
@@ -185,6 +216,15 @@ func extractBearerToken(headers []byte) []byte {
 		return headers[start : start+end]
 	}
 	return nil
+}
+
+func writeWebSocketUpgrade(c net.Conn, key []byte) error {
+	h := sha1.New()
+	h.Write(bytes.TrimSpace(key))
+	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
+	_, err := fmt.Fprintf(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept)
+	return err
 }
 
 var fallbackHTML = []byte("HTTP/1.1 200 OK\r\n" +

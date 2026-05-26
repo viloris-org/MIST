@@ -1,10 +1,14 @@
 package mistclient
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -12,6 +16,7 @@ import (
 	"mist/proxy"
 	"mist/proxy/padding"
 	"mist/proxy/session"
+	"mist/proxy/wsconn"
 	"mist/util"
 
 	"MistCore/common/buf"
@@ -116,26 +121,35 @@ func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {
 
 	b := buf.NewPacket()
 	defer b.Release()
+	wsKey, err := newWebSocketKey()
+	if err != nil {
+		tlsConn.Close()
+		return nil, err
+	}
 
-	// Embed the auth hash in a fake HTTP request so the handshake looks
-	// like normal web traffic to DPI.
+	// Use a real WebSocket upgrade envelope so the long-lived binary stream
+	// has a common HTTPS shape instead of a one-off HTTP-looking preamble.
 	b.WriteString("GET / HTTP/1.1\r\n")
 	fmt.Fprintf(b, "Host: %s\r\n", c.httpHost())
+	b.WriteString("Upgrade: websocket\r\n")
+	b.WriteString("Connection: Upgrade\r\n")
+	fmt.Fprintf(b, "Sec-WebSocket-Key: %s\r\n", wsKey)
+	b.WriteString("Sec-WebSocket-Version: 13\r\n")
 	fmt.Fprintf(b, "Authorization: Bearer %s\r\n", base64.RawURLEncoding.EncodeToString(c.passwordHash))
 	b.WriteString("User-Agent: Mozilla/5.0\r\n")
 	b.WriteString("Accept: */*\r\n")
 	b.WriteString("\r\n")
 
-	// Random HTTP body as preamble padding.
-	bodyLen, _ := padding.RandomInt(101) // [0, 100]
-	b.WriteRandom(bodyLen + 30)          // [30, 130]
-
 	if _, err := b.WriteTo(tlsConn); err != nil {
 		tlsConn.Close()
 		return nil, err
 	}
+	if err := readWebSocketUpgrade(tlsConn, wsKey); err != nil {
+		tlsConn.Close()
+		return nil, err
+	}
 
-	return tlsConn, nil
+	return wsconn.NewClient(tlsConn), nil
 }
 
 func (c *Client) httpHost() string {
@@ -147,6 +161,63 @@ func (c *Client) httpHost() string {
 		return host
 	}
 	return c.opts.ServerAddr
+}
+
+func newWebSocketKey() (string, error) {
+	var key [16]byte
+	if _, err := io.ReadFull(rand.Reader, key[:]); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(key[:]), nil
+}
+
+func readWebSocketUpgrade(conn net.Conn, wsKey string) error {
+	header := make([]byte, 0, 256)
+	var one [1]byte
+	for !bytes.Contains(header, []byte("\r\n\r\n")) {
+		if len(header) > 4096 {
+			return fmt.Errorf("websocket upgrade response too large")
+		}
+		if _, err := io.ReadFull(conn, one[:]); err != nil {
+			return err
+		}
+		header = append(header, one[0])
+	}
+	if !bytes.HasPrefix(header, []byte("HTTP/1.1 101 ")) && !bytes.HasPrefix(header, []byte("HTTP/1.0 101 ")) {
+		lineEnd := bytes.Index(header, []byte("\r\n"))
+		if lineEnd < 0 {
+			lineEnd = len(header)
+		}
+		return fmt.Errorf("websocket upgrade failed: %s", string(header[:lineEnd]))
+	}
+	accept := headerValue(header, "sec-websocket-accept")
+	if accept == "" {
+		return fmt.Errorf("websocket upgrade missing accept header")
+	}
+	if accept != webSocketAccept(wsKey) {
+		return fmt.Errorf("websocket upgrade accept mismatch")
+	}
+	return nil
+}
+
+func headerValue(header []byte, name string) string {
+	for _, line := range bytes.Split(header, []byte("\r\n")) {
+		colon := bytes.IndexByte(line, ':')
+		if colon < 0 {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(string(line[:colon])), name) {
+			return strings.TrimSpace(string(line[colon+1:]))
+		}
+	}
+	return ""
+}
+
+func webSocketAccept(key string) string {
+	h := sha1.New()
+	h.Write([]byte(strings.TrimSpace(key)))
+	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
 // NewConnection implements the MistCore TCPConnectionHandler interface for

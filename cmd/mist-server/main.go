@@ -152,6 +152,7 @@ func baseTLSConfig(tlsMinVersion uint16) *tls.Config {
 	config := &tls.Config{
 		MinVersion:       tlsMinVersion,
 		CurvePreferences: util.RandomizedCurvePreferences(),
+		NextProtos:       []string{"http/1.1"},
 	}
 	if tlsMinVersion == tls.VersionTLS12 {
 		config.CipherSuites = []uint16{

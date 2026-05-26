@@ -91,7 +91,7 @@ func (o *Options) TLSConfig() (*tls.Config, error) {
 		ClientSessionCache: tls.NewLRUClientSessionCache(64),
 		KeyLogWriter:       o.KeyLogWriter,
 		CurvePreferences:   util.RandomizedCurvePreferences(),
-		NextProtos:         util.RandomizedALPN(),
+		NextProtos:         []string{"http/1.1"},
 	}
 
 	if o.TLSCertSHA256 != "" {
