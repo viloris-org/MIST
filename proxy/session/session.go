@@ -34,6 +34,22 @@ const (
 
 var clientDebugPaddingScheme = os.Getenv("CLIENT_DEBUG_PADDING_SCHEME") == "1"
 
+var cachedNow atomic.Value
+
+func init() {
+	cachedNow.Store(time.Now())
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		for range ticker.C {
+			cachedNow.Store(time.Now())
+		}
+	}()
+}
+
+func now() time.Time {
+	return cachedNow.Load().(time.Time)
+}
+
 var errFramePayloadTooLarge = errors.New("frame payload too large")
 
 type Session struct {
@@ -76,6 +92,7 @@ type Session struct {
 
 	// hardening
 	maxStreams        int
+	streamBufferSize  int
 	readTimeout       time.Duration
 	keepaliveInterval time.Duration
 	lastRecv          time.Time
@@ -127,7 +144,7 @@ func (s *Session) Info() SessionInfo {
 	}
 }
 
-func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
+func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, streamBufferSize int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
 	s := &Session{
 		conn:              conn,
 		isClient:          true,
@@ -135,6 +152,7 @@ func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.Paddin
 		padding:           _padding,
 		createdAt:         time.Now(),
 		maxStreams:        maxStreams,
+		streamBufferSize:  streamBufferSize,
 		readTimeout:       readTimeout,
 		keepaliveInterval: keepaliveInterval,
 		synRateLimit:      synRateLimit,
@@ -152,13 +170,14 @@ func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.Paddin
 	return s
 }
 
-func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
+func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, streamBufferSize int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
 	s := &Session{
 		conn:              conn,
 		onNewStream:       onNewStream,
 		padding:           _padding,
 		createdAt:         time.Now(),
 		maxStreams:        maxStreams,
+		streamBufferSize:  streamBufferSize,
 		readTimeout:       readTimeout,
 		keepaliveInterval: keepaliveInterval,
 		synRateLimit:      synRateLimit,
@@ -313,10 +332,10 @@ func (s *Session) recvLoop() error {
 		}
 		// read header first
 		if s.readTimeout > 0 {
-			s.conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+			s.conn.SetReadDeadline(now().Add(s.readTimeout))
 		}
 		if _, err := io.ReadFull(s.conn, hdr[:]); err == nil {
-			s.lastRecv = time.Now()
+			s.lastRecv = now()
 			sid := hdr.StreamID()
 			switch hdr.Cmd() {
 			case cmdPSH:
@@ -355,10 +374,10 @@ func (s *Session) recvLoop() error {
 					}
 				}
 				if s.synRateLimit > 0 {
-					now := time.Now()
-					if now.Sub(s.synWindowStart) > time.Second {
+					n := now()
+					if n.Sub(s.synWindowStart) > time.Second {
 						s.synCount = 0
-						s.synWindowStart = now
+						s.synWindowStart = n
 					}
 					s.synCount++
 					if s.synCount > s.synRateLimit {
@@ -597,26 +616,117 @@ func (s *Session) streamClosed(sid uint32) error {
 }
 
 func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
-	if s.sendPadding || s.hmacMode {
-		chunkMax := maxFramePayloadLen
-		if s.hmacMode {
-			chunkMax = effectiveMaxPayload
-		}
-		total := 0
-		for len(data) > 0 {
-			chunkLen := min(len(data), chunkMax)
-			if err := s.writePSHFrame(sid, data[:chunkLen]); err != nil {
-				return total, err
-			}
-			total += chunkLen
-			data = data[chunkLen:]
-		}
-		return total, nil
+	// HMAC-only path: coalesce frames like the fast path to reduce conn.Write calls.
+	if s.hmacMode && !s.sendPadding {
+		return s.writeDataFrameHMAC(sid, data)
 	}
 
-	// Fast path: no padding — coalesce frames into a pooled buffer.
-	// Frame building runs outside writeMu so multiple streams can prepare
-	// frames concurrently; only the final conn.Write is serialized.
+	// Padding path (with or without HMAC): per-frame writes preserve pktCounter.
+	if s.sendPadding {
+		return s.writeDataFramePadded(sid, data)
+	}
+
+	// Fast path: no padding, no HMAC — coalesce frames into a pooled buffer.
+	return s.writeDataFrameFast(sid, data)
+}
+
+func (s *Session) writeDataFrameHMAC(sid uint32, data []byte) (int, error) {
+	total := 0
+	remaining := data
+	for len(remaining) > 0 {
+		payloadLimit := min(len(remaining), maxCoalescedWrite)
+
+		// Count chunks and compute total batch size.
+		chunks := 0
+		batchSize := 0
+		tmp := remaining[:payloadLimit]
+		for len(tmp) > 0 {
+			chunkLen := min(len(tmp), effectiveMaxPayload)
+			batchSize += chunkLen + headerOverHeadSize + hmacTrailerLen
+			tmp = tmp[chunkLen:]
+			chunks++
+		}
+
+		// Single frame: bypass intermediate copy.
+		if chunks == 1 {
+			chunkLen := min(payloadLimit, effectiveMaxPayload)
+			bufPtr := s.buildFrame(cmdPSH, sid, remaining[:chunkLen])
+			s.writeMu.Lock()
+			n, err := s.writeConnLocked(*bufPtr)
+			s.writeMu.Unlock()
+			s.frameBufPool.Put(bufPtr)
+
+			n -= headerOverHeadSize + hmacTrailerLen
+			if n < 0 {
+				n = 0
+			}
+			if n > chunkLen {
+				n = chunkLen
+			}
+			total += n
+			if err != nil {
+				return total, err
+			}
+			remaining = remaining[chunkLen:]
+			continue
+		}
+
+		// Multiple frames: build and coalesce into one buffer.
+		batchPtr := s.frameBufPool.Get().(*[]byte)
+		batchBuf := *batchPtr
+		if cap(batchBuf) < batchSize {
+			batchBuf = make([]byte, batchSize)
+			*batchPtr = batchBuf
+		}
+		batchBuf = batchBuf[:0]
+		batch := remaining[:payloadLimit]
+		for len(batch) > 0 {
+			chunkLen := min(len(batch), effectiveMaxPayload)
+			bufPtr := s.buildFrame(cmdPSH, sid, batch[:chunkLen])
+			batchBuf = append(batchBuf, *bufPtr...)
+			s.frameBufPool.Put(bufPtr)
+			batch = batch[chunkLen:]
+		}
+
+		s.writeMu.Lock()
+		n, err := s.writeConnLocked(batchBuf)
+		s.writeMu.Unlock()
+		s.frameBufPool.Put(batchPtr)
+
+		n -= chunks * (headerOverHeadSize + hmacTrailerLen)
+		if n < 0 {
+			n = 0
+		}
+		if n > payloadLimit {
+			n = payloadLimit
+		}
+		total += n
+		if err != nil {
+			return total, err
+		}
+		remaining = remaining[payloadLimit:]
+	}
+	return total, nil
+}
+
+func (s *Session) writeDataFramePadded(sid uint32, data []byte) (int, error) {
+	chunkMax := maxFramePayloadLen
+	if s.hmacMode {
+		chunkMax = effectiveMaxPayload
+	}
+	total := 0
+	for len(data) > 0 {
+		chunkLen := min(len(data), chunkMax)
+		if err := s.writePSHFrame(sid, data[:chunkLen]); err != nil {
+			return total, err
+		}
+		total += chunkLen
+		data = data[chunkLen:]
+	}
+	return total, nil
+}
+
+func (s *Session) writeDataFrameFast(sid uint32, data []byte) (int, error) {
 	total := 0
 	remaining := data
 	for len(remaining) > 0 {
@@ -689,11 +799,39 @@ func (s *Session) writeControlFrame(frame frame) (int, error) {
 	return dataLen, nil
 }
 
-func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
+// buildFrame builds a single framed packet into a pooled buffer.
+// The returned *[]byte must be returned to s.frameBufPool after use.
+func (s *Session) buildFrame(cmd byte, sid uint32, data []byte) *[]byte {
+	hmacNeeded := s.hmacMode && !isHandshakeFrame(cmd)
 	trailerLen := 0
-	var hmacTrailerBuf [hmacTrailerLen]byte
-	if s.hmacMode && !isHandshakeFrame(cmd) {
-		trailerLen = s.computeFrameHMAC(hmacTrailerBuf[:], cmd, sid, data)
+	if hmacNeeded {
+		trailerLen = hmacTrailerLen
+	}
+
+	frameLen := len(data) + trailerLen + headerOverHeadSize
+
+	bufPtr := s.frameBufPool.Get().(*[]byte)
+	buf := *bufPtr
+	if cap(buf) < frameLen {
+		buf = make([]byte, frameLen)
+		*bufPtr = buf
+	}
+	frame := buf[:frameLen]
+	frame[0] = cmd
+	binary.BigEndian.PutUint32(frame[1:5], sid)
+	binary.BigEndian.PutUint16(frame[5:7], uint16(len(data)+trailerLen))
+	copy(frame[headerOverHeadSize:], data)
+	if hmacNeeded {
+		s.appendFrameHMAC(frame[headerOverHeadSize+len(data):], cmd, sid, data)
+	}
+	return bufPtr
+}
+
+func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
+	hmacNeeded := s.hmacMode && !isHandshakeFrame(cmd)
+	trailerLen := 0
+	if hmacNeeded {
+		trailerLen = hmacTrailerLen
 	}
 
 	wirePayloadLen := len(data) + trailerLen
@@ -710,8 +848,8 @@ func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
 	binary.BigEndian.PutUint32(frame[1:5], sid)
 	binary.BigEndian.PutUint16(frame[5:7], uint16(wirePayloadLen))
 	copy(frame[headerOverHeadSize:], data)
-	if trailerLen > 0 {
-		copy(frame[headerOverHeadSize+len(data):], hmacTrailerBuf[:trailerLen])
+	if hmacNeeded {
+		s.appendFrameHMAC(frame[headerOverHeadSize+len(data):], cmd, sid, data)
 	}
 
 	n, err := s.writeConnLocked(frame)
@@ -757,11 +895,37 @@ func (s *Session) writeConnLocked(b []byte) (n int, err error) {
 			}
 			s.paddingBuf = pktSizes
 
-			payload := b
-			if cap(s.paddingWriteBuffer) < len(b)+headerOverHeadSize+padding.MaxRecordPayloadSize {
-				s.paddingWriteBuffer = make([]byte, 0, len(b)+headerOverHeadSize+padding.MaxRecordPayloadSize)
+			// Compute exact output size to avoid incremental allocations.
+			exactCap := 0
+			remainingForCalc := len(b)
+			for _, l := range pktSizes {
+				if l == padding.CheckMark {
+					if remainingForCalc == 0 {
+						break
+					}
+					continue
+				}
+				if remainingForCalc > l {
+					exactCap += l
+					remainingForCalc -= l
+				} else if remainingForCalc > 0 {
+					paddingLen := l - remainingForCalc - headerOverHeadSize
+					exactCap += remainingForCalc
+					if paddingLen > 0 {
+						exactCap += headerOverHeadSize + paddingLen
+					}
+					remainingForCalc = 0
+				} else {
+					exactCap += headerOverHeadSize + l
+				}
+			}
+			exactCap += remainingForCalc
+
+			if cap(s.paddingWriteBuffer) < exactCap {
+				s.paddingWriteBuffer = make([]byte, 0, exactCap)
 			}
 			out := s.paddingWriteBuffer[:0]
+			payload := b
 			for _, l := range pktSizes {
 				remainPayloadLen := len(payload)
 				if l == padding.CheckMark {
@@ -812,7 +976,6 @@ func appendWasteFrame(dst []byte, paddingLen int) []byte {
 	frame[0] = cmdWaste
 	binary.BigEndian.PutUint32(frame[1:5], 0)
 	binary.BigEndian.PutUint16(frame[5:7], uint16(paddingLen))
-	clear(frame[headerOverHeadSize:])
 	return dst
 }
 

@@ -66,6 +66,7 @@ func NewClient(opts Options) (*Client, error) {
 		sessionTimeout,
 		opts.MinIdleSession,
 		opts.MaxStreams,
+		opts.StreamBufferSize,
 		opts.ReadTimeout,
 		opts.KeepaliveInterval,
 		opts.SynRateLimit,

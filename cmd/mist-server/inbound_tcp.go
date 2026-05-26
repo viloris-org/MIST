@@ -90,7 +90,7 @@ func handleTcpConnection(ctx context.Context, c net.Conn, s *myServer) {
 		} else {
 			proxyOutboundTCP(ctx, stream, destination)
 		}
-	}, &padding.DefaultPaddingFactory, s.maxStreams, s.readTimeout, s.keepaliveInterval, s.synRateLimit, s.passwordHash)
+	}, &padding.DefaultPaddingFactory, s.maxStreams, s.streamBufferSize, s.readTimeout, s.keepaliveInterval, s.synRateLimit, s.passwordHash)
 	session.Run()
 	session.Close()
 }

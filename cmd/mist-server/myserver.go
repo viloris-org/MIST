@@ -10,6 +10,7 @@ type myServer struct {
 	tlsConfig         *tls.Config
 	fallbackAddr      string
 	maxStreams        int
+	streamBufferSize  int
 	readTimeout       time.Duration
 	keepaliveInterval time.Duration
 	synRateLimit      int
@@ -19,11 +20,12 @@ type myServer struct {
 	acceptedConns   atomic.Int64
 }
 
-func NewMyServer(tlsConfig *tls.Config, fallbackAddr string, maxStreams int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *myServer {
+func NewMyServer(tlsConfig *tls.Config, fallbackAddr string, maxStreams int, streamBufferSize int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *myServer {
 	s := &myServer{
 		tlsConfig:         tlsConfig,
 		fallbackAddr:      fallbackAddr,
 		maxStreams:        maxStreams,
+		streamBufferSize:  streamBufferSize,
 		readTimeout:       readTimeout,
 		keepaliveInterval: keepaliveInterval,
 		synRateLimit:      synRateLimit,

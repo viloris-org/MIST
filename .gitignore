@@ -3,6 +3,7 @@
 /cmd/server/server
 *.exe
 *.zip
+*.test
 .vscode
 /mist-server
 /mist-client

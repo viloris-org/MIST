@@ -29,6 +29,7 @@ type Options struct {
 	// Session pool
 	MinIdleSession     int
 	MaxStreams         int
+	StreamBufferSize   int // 0 means use default (16)
 	ReadTimeout        time.Duration
 	KeepaliveInterval  time.Duration
 	SynRateLimit       int

@@ -38,6 +38,7 @@ func main() {
 	readTimeout := flag.Duration("read-timeout", 5*time.Minute, "read deadline for idle connections (0 = disabled)")
 	keepalive := flag.Duration("keepalive", 30*time.Second, "keepalive interval (0 = disabled)")
 	synRateLimit := flag.Int("syn-rate-limit", 0, "max SYN frames per second per session (0 = unlimited)")
+	streamBufferSize := flag.Int("stream-buffer-size", 0, "per-stream read buffer size (0 = default of 16)")
 	flag.Parse()
 
 	if *password == "" {
@@ -96,7 +97,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	server := NewMyServer(tlsConfig, *fallback, *maxStreams, *readTimeout, *keepalive, *synRateLimit, passwordSha256)
+	server := NewMyServer(tlsConfig, *fallback, *maxStreams, *streamBufferSize, *readTimeout, *keepalive, *synRateLimit, passwordSha256)
 
 	for {
 		c, err := listener.Accept()

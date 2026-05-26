@@ -23,7 +23,7 @@ func (discardConn) Write(b []byte) (int, error)      { return len(b), nil }
 func newBenchSession(b *testing.B, enablePadding bool) *Session {
 	b.Helper()
 
-	s := NewClientSession(discardConn{}, &padding.DefaultPaddingFactory, 0, 0, 0, 0, nil)
+	s := NewClientSession(discardConn{}, &padding.DefaultPaddingFactory, 0, 0, 0, 0, 0, nil)
 	s.sendPadding = enablePadding
 	return s
 }

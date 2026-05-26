@@ -11,7 +11,7 @@ import (
 	"MistCore/common/buf"
 )
 
-const streamReadBuffer = 16
+const defaultStreamBufferSize = 16
 
 // Stream implements net.Conn
 type Stream struct {
@@ -39,7 +39,11 @@ func newStream(id uint32, sess *Session) *Stream {
 	s := new(Stream)
 	s.id = id
 	s.sess = sess
-	s.dataCh = make(chan []byte, streamReadBuffer)
+	bufSize := sess.streamBufferSize
+	if bufSize <= 0 {
+		bufSize = defaultStreamBufferSize
+	}
+	s.dataCh = make(chan []byte, bufSize)
 	s.die = make(chan struct{})
 	return s
 }
