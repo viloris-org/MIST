@@ -105,8 +105,8 @@ func TestOptionsSetDefaults(t *testing.T) {
 	if opts.TLSProfile != "default" {
 		t.Fatalf("default TLSProfile = %q, want default", opts.TLSProfile)
 	}
-	if opts.TrafficProfile != "web" {
-		t.Fatalf("default TrafficProfile = %q, want web", opts.TrafficProfile)
+	if opts.TrafficProfile != "api" {
+		t.Fatalf("default TrafficProfile = %q, want api", opts.TrafficProfile)
 	}
 }
 

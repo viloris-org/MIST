@@ -56,7 +56,7 @@ func (o *Options) SetDefaults() {
 		o.TLSProfile = "default"
 	}
 	if o.TrafficProfile == "" {
-		o.TrafficProfile = "web"
+		o.TrafficProfile = "api"
 	}
 	if o.MinIdleSession == 0 {
 		o.MinIdleSession = 1

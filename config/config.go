@@ -87,7 +87,7 @@ func (c *ClientConfig) SetDefaults() {
 		c.TLS.TLSProfile = "default"
 	}
 	if c.TLS.TrafficProfile == "" {
-		c.TLS.TrafficProfile = "web"
+		c.TLS.TrafficProfile = "api"
 	}
 	if c.Inbound.Listen == "" {
 		c.Inbound.Listen = "127.0.0.1:1080"

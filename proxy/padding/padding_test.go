@@ -39,7 +39,7 @@ func TestGenerateRecordPayloadSizesIntoReusesDestination(t *testing.T) {
 }
 
 func TestGenerateProfileScheme(t *testing.T) {
-	for _, profile := range []string{ProfileWeb, ProfileAPI, ProfileRandom} {
+	for _, profile := range []string{ProfileWeb, ProfileAPI, ProfileRandom, ProfileNone} {
 		raw, err := GenerateProfileScheme(profile)
 		if err != nil {
 			t.Fatalf("GenerateProfileScheme(%q): %v", profile, err)

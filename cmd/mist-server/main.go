@@ -29,7 +29,7 @@ func main() {
 	listen := flag.String("l", "0.0.0.0:8443", "server listen port")
 	password := flag.String("p", "", "password")
 	paddingScheme := flag.String("padding-scheme", "", "padding-scheme")
-	trafficProfile := flag.String("traffic-profile", "web", "padding traffic profile: web, api, or random")
+	trafficProfile := flag.String("traffic-profile", "api", "padding traffic profile: none, api, web, or random")
 	certType := flag.String("cert-type", "self-signed", "certificate type: self-signed (or self/ip), acme (or domain), or custom")
 	certName := flag.String("cert-name", "", "certificate IP address or domain name")
 	acmeHTTP := flag.String("acme-http", ":80", "ACME HTTP-01 challenge listen address")

@@ -155,11 +155,17 @@ func (s *Session) Info() SessionInfo {
 }
 
 func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, streamBufferSize int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
+	sendPadding := true
+	wasteAfterEnabled := true
+	if pf := _padding.Load(); pf != nil && pf.Stop <= 1 {
+		sendPadding = false
+		wasteAfterEnabled = false
+	}
 	s := &Session{
 		conn:                conn,
 		isClient:            true,
-		sendPadding:         true,
-		wasteAfterEnabled:   true,
+		sendPadding:         sendPadding,
+		wasteAfterEnabled:   wasteAfterEnabled,
 		wasteAfterCountdown: 5,
 		padding:             _padding,
 		createdAt:           time.Now(),
@@ -183,10 +189,14 @@ func NewClientSession(conn net.Conn, _padding *atomic.TypedValue[*padding.Paddin
 }
 
 func NewServerSession(conn net.Conn, onNewStream func(stream *Stream), _padding *atomic.TypedValue[*padding.PaddingFactory], maxStreams int, streamBufferSize int, readTimeout, keepaliveInterval time.Duration, synRateLimit int, passwordHash []byte) *Session {
+	wasteAfterEnabled := true
+	if pf := _padding.Load(); pf != nil && pf.Stop <= 1 {
+		wasteAfterEnabled = false
+	}
 	s := &Session{
 		conn:                conn,
 		onNewStream:         onNewStream,
-		wasteAfterEnabled:   true,
+		wasteAfterEnabled:   wasteAfterEnabled,
 		wasteAfterCountdown: 5,
 		padding:             _padding,
 		createdAt:           time.Now(),
@@ -226,7 +236,6 @@ func (s *Session) Run() {
 	}
 	f := newFrame(cmdSettings, 0)
 	f.data = settings.ToBytes()
-	s.buffering = true
 	s.writeControlFrame(f)
 
 	go s.recvLoop()
@@ -293,6 +302,7 @@ func (s *Session) OpenStream() (*Stream, error) {
 		s.synDoneLock.Unlock()
 	}
 
+	s.buffering = true
 	if _, err := s.writeControlFrame(newFrame(cmdSYN, sid)); err != nil {
 		return nil, err
 	}
@@ -634,6 +644,11 @@ func (s *Session) streamClosed(sid uint32) error {
 }
 
 func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
+	// Write jitter degrades ML-based inter-packet timing features.
+	if n, err := padding.RandomInt(1500); err == nil {
+		time.Sleep(time.Duration(n) * time.Microsecond)
+	}
+
 	// HMAC-only path: coalesce frames like the fast path to reduce conn.Write calls.
 	if s.hmacMode && !s.sendPadding {
 		return s.writeDataFrameHMAC(sid, data)

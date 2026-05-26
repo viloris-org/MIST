@@ -71,6 +71,7 @@ const (
 	ProfileRandom = "random"
 	ProfileWeb    = "web"
 	ProfileAPI    = "api"
+	ProfileNone   = "none"
 )
 
 var defaultPaddingScheme = func() []byte {
@@ -238,6 +239,8 @@ func GenerateProfileScheme(profile string) ([]byte, error) {
 		return generateAPIScheme()
 	case ProfileRandom:
 		return generateRandomScheme()
+	case ProfileNone:
+		return generateNoneScheme()
 	default:
 		return nil, fmt.Errorf("unknown padding profile %q", profile)
 	}
@@ -247,7 +250,7 @@ func GenerateProfileScheme(profile string) ([]byte, error) {
 // profile.
 func ValidateProfile(profile string) error {
 	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case "", ProfileWeb, ProfileAPI, ProfileRandom:
+	case "", ProfileWeb, ProfileAPI, ProfileRandom, ProfileNone:
 		return nil
 	default:
 		return fmt.Errorf("unknown padding profile %q", profile)
@@ -337,14 +340,32 @@ func generateWebScheme() ([]byte, error) {
 	}
 	stop += 80 // [80, 200]
 
+	warmupEnd, err := randomInt(7) // [0, 6]
+	if err != nil {
+		return nil, err
+	}
+	warmupEnd += 5 // [5, 11]
+
+	burstFracDenom, err := randomInt(3) // [0, 2]
+	if err != nil {
+		return nil, err
+	}
+	burstFracDenom += 2 // [2, 4]
+
+	bias, err := randomInt(25) // [0, 24]
+	if err != nil {
+		return nil, err
+	}
+	bias -= 12 // [-12, 12]
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "stop=%d\n", stop)
 	sb.WriteString("0=30-30\n")
 
 	for pkt := 1; pkt < stop; pkt++ {
 		fmt.Fprintf(&sb, "%d=", pkt)
-		phase := webPhase(pkt, stop)
-		if err := appendProfileRule(&sb, phase); err != nil {
+		phase := webPhase(pkt, stop, warmupEnd, burstFracDenom)
+		if err := appendProfileRule(&sb, phase, bias); err != nil {
 			return nil, err
 		}
 		sb.WriteByte('\n')
@@ -362,19 +383,32 @@ func generateAPIScheme() ([]byte, error) {
 	}
 	stop += 40 // [40, 120]
 
+	bias, err := randomInt(25) // [0, 24]
+	if err != nil {
+		return nil, err
+	}
+	bias -= 12 // [-12, 12]
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "stop=%d\n", stop)
 	sb.WriteString("0=30-30\n")
 
 	for pkt := 1; pkt < stop; pkt++ {
 		fmt.Fprintf(&sb, "%d=", pkt)
-		if err := appendProfileRule(&sb, profilePhaseAPI); err != nil {
+		if err := appendProfileRule(&sb, profilePhaseAPI, bias); err != nil {
 			return nil, err
 		}
 		sb.WriteByte('\n')
 	}
 
 	return []byte(sb.String()), nil
+}
+
+// generateNoneScheme produces a minimal scheme that disables padding after the
+// first write. Packet 0 is kept at 30-30 for preamble compatibility; stop=1
+// causes sendPadding to become false immediately on the first data write.
+func generateNoneScheme() ([]byte, error) {
+	return []byte("stop=1\n0=30-30\n"), nil
 }
 
 const (
@@ -384,18 +418,18 @@ const (
 	profilePhaseAPI
 )
 
-func webPhase(pkt, stop int) int {
+func webPhase(pkt, stop, warmupEnd, burstFracDenom int) int {
 	switch {
-	case pkt < 8:
+	case pkt < warmupEnd:
 		return profilePhaseWarmup
-	case pkt < stop/3:
+	case burstFracDenom > 0 && pkt < stop/burstFracDenom:
 		return profilePhaseBurst
 	default:
 		return profilePhaseTail
 	}
 }
 
-func appendProfileRule(sb *strings.Builder, phase int) error {
+func appendProfileRule(sb *strings.Builder, phase, bias int) error {
 	kind, err := randomInt(100)
 	if err != nil {
 		return err
@@ -403,21 +437,23 @@ func appendProfileRule(sb *strings.Builder, phase int) error {
 
 	switch phase {
 	case profilePhaseWarmup:
-		return appendWarmupRule(sb, kind)
+		return appendWarmupRule(sb, kind, bias)
 	case profilePhaseBurst:
-		return appendBurstRule(sb, kind)
+		return appendBurstRule(sb, kind, bias)
 	case profilePhaseAPI:
-		return appendAPIRule(sb, kind)
+		return appendAPIRule(sb, kind, bias)
 	default:
-		return appendTailRule(sb, kind)
+		return appendTailRule(sb, kind, bias)
 	}
 }
 
-func appendWarmupRule(sb *strings.Builder, kind int) error {
+func appendWarmupRule(sb *strings.Builder, kind, bias int) error {
+	t1 := clamp(20+bias, 5, 35)
+	t2 := clamp(70+bias, 55, 85)
 	switch {
-	case kind < 20:
+	case kind < t1:
 		sb.WriteString("c")
-	case kind < 70:
+	case kind < t2:
 		return appendWasteCheckWaste(sb, 40, 360, 40, 900)
 	default:
 		return appendWasteRange(sb, 300, 1500)
@@ -425,15 +461,19 @@ func appendWarmupRule(sb *strings.Builder, kind int) error {
 	return nil
 }
 
-func appendBurstRule(sb *strings.Builder, kind int) error {
+func appendBurstRule(sb *strings.Builder, kind, bias int) error {
+	t1 := clamp(12+bias, 3, 25)
+	t2 := clamp(38+bias, 23, 55)
+	t3 := clamp(82+bias, 65, 92)
+	t4 := clamp(96+bias, 88, 99)
 	switch {
-	case kind < 12:
+	case kind < t1:
 		sb.WriteString("c")
-	case kind < 38:
+	case kind < t2:
 		return appendWasteCheckWaste(sb, 60, 700, 300, 1500)
-	case kind < 82:
+	case kind < t3:
 		return appendWasteRange(sb, 900, 4096)
-	case kind < 96:
+	case kind < t4:
 		return appendWasteRange(sb, 4096, MaxRecordPayloadSize)
 	default:
 		return appendTwoWasteRanges(sb, 300, 1500, 900, 4096)
@@ -441,13 +481,16 @@ func appendBurstRule(sb *strings.Builder, kind int) error {
 	return nil
 }
 
-func appendTailRule(sb *strings.Builder, kind int) error {
+func appendTailRule(sb *strings.Builder, kind, bias int) error {
+	t1 := clamp(28+bias, 13, 43)
+	t2 := clamp(58+bias, 43, 73)
+	t3 := clamp(88+bias, 73, 95)
 	switch {
-	case kind < 28:
+	case kind < t1:
 		sb.WriteString("c")
-	case kind < 58:
+	case kind < t2:
 		return appendWasteCheckWaste(sb, 40, 220, 40, 700)
-	case kind < 88:
+	case kind < t3:
 		return appendWasteRange(sb, 120, 1200)
 	default:
 		return appendWasteRange(sb, 1200, 4096)
@@ -455,13 +498,16 @@ func appendTailRule(sb *strings.Builder, kind int) error {
 	return nil
 }
 
-func appendAPIRule(sb *strings.Builder, kind int) error {
+func appendAPIRule(sb *strings.Builder, kind, bias int) error {
+	t1 := clamp(30+bias, 15, 45)
+	t2 := clamp(70+bias, 55, 85)
+	t3 := clamp(95+bias, 85, 99)
 	switch {
-	case kind < 30:
+	case kind < t1:
 		sb.WriteString("c")
-	case kind < 70:
+	case kind < t2:
 		return appendWasteCheckWaste(sb, 40, 220, 40, 700)
-	case kind < 95:
+	case kind < t3:
 		return appendWasteRange(sb, 300, 1500)
 	default:
 		return appendWasteRange(sb, 1500, 4096)
@@ -517,4 +563,8 @@ func randomWasteSize() (int, error) {
 		return 0, err
 	}
 	return n + 30, nil // [30, 2000]
+}
+
+func clamp(v, lo, hi int) int {
+	return max(lo, min(hi, v))
 }

@@ -89,8 +89,8 @@ func TestSetDefaults(t *testing.T) {
 	if cfg.TLS.TLSProfile != "default" {
 		t.Errorf("TLS.TLSProfile = %q, want default", cfg.TLS.TLSProfile)
 	}
-	if cfg.TLS.TrafficProfile != "web" {
-		t.Errorf("TLS.TrafficProfile = %q, want web", cfg.TLS.TrafficProfile)
+	if cfg.TLS.TrafficProfile != "api" {
+		t.Errorf("TLS.TrafficProfile = %q, want api", cfg.TLS.TrafficProfile)
 	}
 	if cfg.Inbound.Listen != "127.0.0.1:1080" {
 		t.Errorf("Inbound.Listen = %q", cfg.Inbound.Listen)
