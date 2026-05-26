@@ -20,11 +20,12 @@ type ClientConfig struct {
 }
 
 type TLSConfig struct {
-	SNI           string `toml:"sni"`
-	CertSHA256    string `toml:"cert_sha256"`
-	Insecure      bool   `toml:"insecure"`
-	MinVersion    string `toml:"min_version"`
-	MinIdleSession int   `toml:"min_idle_session"`
+	SNI            string `toml:"sni"`
+	CertSHA256     string `toml:"cert_sha256"`
+	Insecure       bool   `toml:"insecure"`
+	MinVersion     string `toml:"min_version"`
+	MinIdleSession int    `toml:"min_idle_session"`
+	Transport      string `toml:"transport"`
 }
 
 type InboundConfig struct {
@@ -49,9 +50,9 @@ type DNSConfig struct {
 }
 
 type LogConfig struct {
-	Format  string `toml:"format"`
-	File    string `toml:"file"`
-	Level   string `toml:"level"`
+	Format string `toml:"format"`
+	File   string `toml:"file"`
+	Level  string `toml:"level"`
 }
 
 // DecodeFile reads and decodes a TOML config file.
@@ -76,6 +77,9 @@ func (c *ClientConfig) SetDefaults() {
 	}
 	if c.TLS.MinIdleSession == 0 {
 		c.TLS.MinIdleSession = 5
+	}
+	if c.TLS.Transport == "" {
+		c.TLS.Transport = "tls"
 	}
 	if c.Inbound.Listen == "" {
 		c.Inbound.Listen = "127.0.0.1:1080"

@@ -43,6 +43,7 @@ type clientConfig struct {
 	insecure        bool
 	minIdleSession  int
 	tlsMinVersion   string
+	transport       string
 	showVersion     bool
 	showVersionJSON bool
 	check           bool
@@ -58,9 +59,9 @@ type clientConfig struct {
 	tunDNS     string
 	tunRoutes  string
 
-	dnsEnabled   bool
-	dnsListen    string
-	dnsUpstream  string
+	dnsEnabled  bool
+	dnsListen   string
+	dnsUpstream string
 }
 
 type inboundSet struct {
@@ -217,6 +218,7 @@ func loadConfigFile(cfg *clientConfig) error {
 		Insecure:       cfg.insecure,
 		TLSMinVersion:  cfg.tlsMinVersion,
 		MinIdleSession: cfg.minIdleSession,
+		Transport:      cfg.transport,
 		Listen:         cfg.listen,
 		Inbound:        cfg.inbound,
 		RedirectListen: cfg.redirectListen,
@@ -243,6 +245,7 @@ func loadConfigFile(cfg *clientConfig) error {
 	cfg.insecure = fileCfg.TLS.Insecure
 	cfg.tlsMinVersion = fileCfg.TLS.MinVersion
 	cfg.minIdleSession = fileCfg.TLS.MinIdleSession
+	cfg.transport = fileCfg.TLS.Transport
 	cfg.listen = fileCfg.Inbound.Listen
 	cfg.inbound = strings.Join(fileCfg.Inbound.Types, ",")
 	cfg.redirectListen = fileCfg.Inbound.RedirectListen
@@ -347,7 +350,7 @@ func (c *udpPacketConn) WritePacket(buffer *buf.Buffer, dest M.Socksaddr) error 
 	return c.conn.WritePacket(buffer.Bytes(), netip.AddrPortFrom(dest.Addr, dest.Port))
 }
 
-func (c *udpPacketConn) Close() error                      { return c.conn.Close() }
+func (c *udpPacketConn) Close() error                       { return c.conn.Close() }
 func (c *udpPacketConn) LocalAddr() net.Addr                { return c.localAddr }
 func (c *udpPacketConn) SetDeadline(t time.Time) error      { return nil }
 func (c *udpPacketConn) SetReadDeadline(t time.Time) error  { return nil }
@@ -456,16 +459,16 @@ func startDNS(ctx context.Context, cfg clientConfig, client *mistclient.Client) 
 type globalStatus struct {
 	startedAt time.Time
 
-	mu         sync.Mutex
-	server     string
-	serverState string
-	lastError  string
-	activeConns atomic.Int64
+	mu            sync.Mutex
+	server        string
+	serverState   string
+	lastError     string
+	activeConns   atomic.Int64
 	acceptedConns atomic.Int64
-	client     *mistclient.Client
-	tun        *tun.Device
-	dns        *dns.Server
-	cfg        clientConfig
+	client        *mistclient.Client
+	tun           *tun.Device
+	dns           *dns.Server
+	cfg           clientConfig
 }
 
 func newGlobalStatus(cfg clientConfig) *globalStatus {
@@ -550,6 +553,7 @@ func parseClientConfig(args []string) (clientConfig, error) {
 	fs.BoolVar(&cfg.insecure, "insecure", false, "allow insecure TLS connection")
 	fs.IntVar(&cfg.minIdleSession, "m", 5, "reserved min idle session")
 	fs.StringVar(&cfg.tlsMinVersion, "tls-min-version", "1.2", "minimum TLS version (1.2 or 1.3)")
+	fs.StringVar(&cfg.transport, "transport", "tls", "transport mode: tls or wss")
 	fs.BoolVar(&cfg.showVersion, "version", false, "print version and exit")
 	fs.BoolVar(&cfg.showVersionJSON, "version-json", false, "print version JSON and exit")
 	fs.BoolVar(&cfg.check, "check", false, "validate configuration and exit")
@@ -611,6 +615,7 @@ func (cfg clientConfig) clientOptions() (mistclient.Options, error) {
 		Insecure:       cfg.insecure,
 		TLSMinVersion:  tlsMinVersion,
 		MinIdleSession: cfg.minIdleSession,
+		Transport:      cfg.transport,
 		Logger:         &logrusAdapter{},
 	}
 	opts.SetDefaults()

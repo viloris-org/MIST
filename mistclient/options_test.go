@@ -99,4 +99,31 @@ func TestOptionsSetDefaults(t *testing.T) {
 	if opts.Logger == nil {
 		t.Fatal("default Logger should not be nil")
 	}
+	if opts.Transport != "tls" {
+		t.Fatalf("default Transport = %q, want tls", opts.Transport)
+	}
+}
+
+func TestTLSConfigDefaultTransportDoesNotAdvertiseHTTP(t *testing.T) {
+	opts := Options{ServerAddr: "example.com:8443", Password: "test"}
+	opts.SetDefaults()
+	cfg, err := opts.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.NextProtos) != 0 {
+		t.Fatalf("NextProtos = %v, want empty for tls transport", cfg.NextProtos)
+	}
+}
+
+func TestTLSConfigWSSTransportAdvertisesHTTP11(t *testing.T) {
+	opts := Options{ServerAddr: "example.com:8443", Password: "test", Transport: "wss"}
+	opts.SetDefaults()
+	cfg, err := opts.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.NextProtos) != 1 || cfg.NextProtos[0] != "http/1.1" {
+		t.Fatalf("NextProtos = %v, want [http/1.1]", cfg.NextProtos)
+	}
 }

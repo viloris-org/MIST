@@ -19,6 +19,7 @@ const certPinHexLen = sha256.Size * 2
 type Options struct {
 	ServerAddr string
 	Password   string
+	Transport  string // tls (default) or wss
 
 	// TLS
 	SNI           string    // override ServerName in TLS ClientHello
@@ -41,6 +42,9 @@ type Options struct {
 
 // SetDefaults fills in sane defaults for zero-value fields.
 func (o *Options) SetDefaults() {
+	if o.Transport == "" {
+		o.Transport = "tls"
+	}
 	if o.TLSMinVersion == 0 {
 		o.TLSMinVersion = tls.VersionTLS12
 	}
@@ -59,6 +63,11 @@ func (o *Options) Validate() error {
 	}
 	if o.Password == "" {
 		return fmt.Errorf("Password is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(o.Transport)) {
+	case "", "tls", "wss":
+	default:
+		return fmt.Errorf("Transport must be tls or wss")
 	}
 	if _, err := parseCertPin(o.TLSCertSHA256); err != nil {
 		return err
@@ -91,7 +100,9 @@ func (o *Options) TLSConfig() (*tls.Config, error) {
 		ClientSessionCache: tls.NewLRUClientSessionCache(64),
 		KeyLogWriter:       o.KeyLogWriter,
 		CurvePreferences:   util.RandomizedCurvePreferences(),
-		NextProtos:         []string{"http/1.1"},
+	}
+	if strings.EqualFold(strings.TrimSpace(o.Transport), "wss") {
+		cfg.NextProtos = []string{"http/1.1"}
 	}
 
 	if o.TLSCertSHA256 != "" {

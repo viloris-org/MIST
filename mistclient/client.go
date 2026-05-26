@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -119,6 +120,14 @@ func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {
 
 	tlsConn := tls.Client(conn, c.tlsConfig)
 
+	if !strings.EqualFold(c.opts.Transport, "wss") {
+		if err := c.writeLegacyAuth(tlsConn); err != nil {
+			tlsConn.Close()
+			return nil, err
+		}
+		return tlsConn, nil
+	}
+
 	b := buf.NewPacket()
 	defer b.Release()
 	wsKey, err := newWebSocketKey()
@@ -150,6 +159,23 @@ func (c *Client) dialSession(ctx context.Context) (net.Conn, error) {
 	}
 
 	return wsconn.NewClient(tlsConn), nil
+}
+
+func (c *Client) writeLegacyAuth(tlsConn net.Conn) error {
+	b := buf.NewPacket()
+	defer b.Release()
+
+	b.Write(c.passwordHash)
+	var paddingLen int
+	if pad, err := padding.DefaultPaddingFactory.Load().GenerateRecordPayloadSizes(0); err == nil && len(pad) > 0 {
+		paddingLen = pad[0]
+	}
+	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))
+	if paddingLen > 0 {
+		b.WriteZeroN(paddingLen)
+	}
+	_, err := b.WriteTo(tlsConn)
+	return err
 }
 
 func (c *Client) httpHost() string {
