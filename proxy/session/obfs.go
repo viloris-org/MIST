@@ -23,7 +23,8 @@ func xorHeader(header []byte, obfsKey []byte, counter uint64) {
 	var ctr [8]byte
 	binary.BigEndian.PutUint64(ctr[:], counter)
 	mac.Write(ctr[:])
-	keystream := mac.Sum(nil)
+	var sum [sha256.Size]byte
+	keystream := mac.Sum(sum[:0])
 	for i := range len(header) {
 		header[i] ^= keystream[i]
 	}

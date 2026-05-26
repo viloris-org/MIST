@@ -5,10 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"MistCore/common/atomic"
 	"mist/util"
@@ -16,28 +16,48 @@ import (
 
 const CheckMark = -1
 
-const randomBufferSize = 4096
-
-var globalRandomSource = &randomSource{}
+var globalRandomSource = newRandomSource()
 
 type randomSource struct {
-	mu  sync.Mutex
-	buf [randomBufferSize]byte
-	off int
+	mu    sync.Mutex
+	state uint64
+}
+
+func newRandomSource() *randomSource {
+	var seed [8]byte
+	if _, err := rand.Read(seed[:]); err != nil {
+		binary.BigEndian.PutUint64(seed[:], uint64(time.Now().UnixNano()))
+	}
+	return &randomSource{state: binary.BigEndian.Uint64(seed[:])}
 }
 
 func (r *randomSource) Uint64() (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.off+8 > len(r.buf) {
-		if _, err := io.ReadFull(rand.Reader, r.buf[:]); err != nil {
-			return 0, err
-		}
-		r.off = 0
+	return r.nextLocked(), nil
+}
+
+func (r *randomSource) Fill(dst []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for len(dst) >= 8 {
+		binary.BigEndian.PutUint64(dst[:8], r.nextLocked())
+		dst = dst[8:]
 	}
-	v := binary.BigEndian.Uint64(r.buf[r.off : r.off+8])
-	r.off += 8
-	return v, nil
+	if len(dst) > 0 {
+		var tail [8]byte
+		binary.BigEndian.PutUint64(tail[:], r.nextLocked())
+		copy(dst, tail[:])
+	}
+	return nil
+}
+
+func (r *randomSource) nextLocked() uint64 {
+	r.state += 0x9e3779b97f4a7c15
+	z := r.state
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
 }
 
 const (
@@ -197,11 +217,10 @@ func RandomInt(maxExclusive int) (int, error) {
 	return randomInt(maxExclusive)
 }
 
-// FillRandom fills buf with random bytes from crypto/rand. It is safe for
-// concurrent use and suitable for infrequent calls.
+// FillRandom fills buf with process-seeded pseudo-random bytes. It is safe for
+// concurrent use and intended for traffic-shaping padding, not key material.
 func FillRandom(buf []byte) error {
-	_, err := io.ReadFull(rand.Reader, buf)
-	return err
+	return globalRandomSource.Fill(buf)
 }
 
 // GenerateRandomScheme creates a legacy randomized padding scheme.

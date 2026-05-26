@@ -110,6 +110,7 @@ type Session struct {
 
 	// header obfuscation (P0 anti-fingerprinting)
 	obfsKey       []byte
+	obfsPool      sync.Pool
 	obfsSendCount atomic.Uint64
 	obfsRecvCount atomic.Uint64
 
@@ -351,7 +352,7 @@ func (s *Session) recvLoop() error {
 			s.lastRecv = now()
 			if s.hmacMode {
 				ctr := s.obfsRecvCount.Add(1)
-				xorHeader(hdr[:], s.obfsKey, ctr)
+				s.xorHeader(hdr[:], ctr)
 			}
 			sid := hdr.StreamID()
 			switch hdr.Cmd() {
@@ -841,7 +842,7 @@ func (s *Session) buildFrame(cmd byte, sid uint32, data []byte) *[]byte {
 	if hmacNeeded {
 		s.appendFrameHMAC(frame[headerOverHeadSize+len(data):], cmd, sid, data)
 		ctr := s.obfsSendCount.Add(1)
-		xorHeader(frame[:headerOverHeadSize], s.obfsKey, ctr)
+		s.xorHeader(frame[:headerOverHeadSize], ctr)
 	}
 	return bufPtr
 }
@@ -870,7 +871,7 @@ func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) (int, error) {
 	if hmacNeeded {
 		s.appendFrameHMAC(frame[headerOverHeadSize+len(data):], cmd, sid, data)
 		ctr := s.obfsSendCount.Add(1)
-		xorHeader(frame[:headerOverHeadSize], s.obfsKey, ctr)
+		s.xorHeader(frame[:headerOverHeadSize], ctr)
 	}
 
 	n, err := s.writeConnLocked(frame)
@@ -1031,7 +1032,7 @@ func (s *Session) appendWasteFrame(dst []byte, paddingLen int) []byte {
 	padding.FillRandom(frame[headerOverHeadSize:])
 	if s.hmacMode {
 		ctr := s.obfsSendCount.Add(1)
-		xorHeader(frame[:headerOverHeadSize], s.obfsKey, ctr)
+		s.xorHeader(frame[:headerOverHeadSize], ctr)
 	}
 	return dst
 }
@@ -1041,6 +1042,7 @@ func (s *Session) setHMACKey(key []byte) {
 	if len(key) == 0 {
 		s.hmacPool = sync.Pool{}
 		s.obfsKey = nil
+		s.obfsPool = sync.Pool{}
 		return
 	}
 	poolKey := append([]byte(nil), key...)
@@ -1050,6 +1052,26 @@ func (s *Session) setHMACKey(key []byte) {
 		},
 	}
 	s.obfsKey = deriveObfsKey(key)
+	poolObfsKey := append([]byte(nil), s.obfsKey...)
+	s.obfsPool = sync.Pool{
+		New: func() any {
+			return hmac.New(sha256.New, poolObfsKey)
+		},
+	}
+}
+
+func (s *Session) xorHeader(header []byte, counter uint64) {
+	mac := s.obfsPool.Get().(hash.Hash)
+	defer s.obfsPool.Put(mac)
+	mac.Reset()
+	var ctr [8]byte
+	binary.BigEndian.PutUint64(ctr[:], counter)
+	mac.Write(ctr[:])
+	var sum [sha256.Size]byte
+	keystream := mac.Sum(sum[:0])
+	for i := range len(header) {
+		header[i] ^= keystream[i]
+	}
 }
 
 func deriveHMACKey(passwordHash, nonce []byte) []byte {
