@@ -3,9 +3,19 @@ name: Release Build
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload assets for"
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+env:
+  CGO_ENABLED: 0
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
   server:
@@ -15,34 +25,34 @@ jobs:
       matrix:
         goarch: [amd64, arm64]
     env:
-      CGO_ENABLED: 0
       GOOS: linux
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.26"
 
-      - name: Build frontend
-        run: cd web && npm ci && npm run build
-
       - name: Build
         run: |
-          GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o mist-server-linux-${{ matrix.goarch }} ./cmd/mist-server
+          GOARCH=${{ matrix.goarch }} go build \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags="-s -w -X mist/util.Version=${RELEASE_TAG#v} -X mist/util.Commit=${GITHUB_SHA} -X mist/util.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o mist-server-linux-${{ matrix.goarch }} \
+            ./cmd/mist-server
 
       - name: Upload
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: mist-server-linux-${{ matrix.goarch }}
+          overwrite_files: true
 
   client:
     name: Client (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -51,33 +61,32 @@ jobs:
       matrix:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
-    env:
-      CGO_ENABLED: 0
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: "1.26"
 
-      - name: Build frontend
-        run: cd web && npm ci && npm run build
-
       - name: Build
         run: |
           SUFFIX=""
           if [ "${{ matrix.goos }}" = "windows" ]; then SUFFIX=".exe"; fi
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o mist-client-${{ matrix.goos }}-${{ matrix.goarch }}${SUFFIX} ./cmd/mist-client
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags="-s -w -X mist/util.Version=${RELEASE_TAG#v} -X mist/util.Commit=${GITHUB_SHA} -X mist/util.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o mist-client-${{ matrix.goos }}-${{ matrix.goarch }}${SUFFIX} \
+            ./cmd/mist-client
 
       - name: Upload
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: mist-client-${{ matrix.goos }}-${{ matrix.goarch }}*
+          overwrite_files: true
